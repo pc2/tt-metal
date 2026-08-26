@@ -1220,6 +1220,17 @@ void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
     }
 }
 
+void MeshDeviceImpl::acquire_command_list_builder() {
+    auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
+    command_list_builder_active_ = true;
+}
+
+void MeshDeviceImpl::release_command_list_builder() {
+    auto lock = lock_api();
+    command_list_builder_active_ = false;
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
