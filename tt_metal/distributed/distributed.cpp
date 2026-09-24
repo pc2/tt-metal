@@ -20,6 +20,9 @@
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -131,6 +134,12 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 }
 
 void EventSynchronize(const MeshEvent& event) {
+#ifdef TT_METAL_USE_EMULE
+    if (event.device()->impl().metal_env().get_rtoptions().get_emule_fast_dispatch()) {
+        emule::event_synchronize(event);
+        return;
+    }
+#endif
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return;
     }
@@ -144,6 +153,11 @@ void EventSynchronize(const MeshEvent& event) {
 }
 
 bool EventQuery(const MeshEvent& event) {
+#ifdef TT_METAL_USE_EMULE
+    if (event.device()->impl().metal_env().get_rtoptions().get_emule_fast_dispatch()) {
+        return emule::event_query(event);
+    }
+#endif
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }

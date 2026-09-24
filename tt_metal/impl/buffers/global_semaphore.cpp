@@ -62,7 +62,7 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
     const auto& rtoptions = MetalContext::instance(extract_context_id(&mesh_device)).rtoptions();
     bool using_fast_dispatch = rtoptions.get_fast_dispatch();
     bool using_simulator = rtoptions.get_simulator_enabled();
-    if (using_fast_dispatch && !using_simulator) {
+    if ((using_fast_dispatch || rtoptions.get_emule_fast_dispatch()) && !using_simulator) {
         mesh_device.mesh_command_queue().enqueue_write_mesh_buffer(buffer_, host_buffer.data(), /*blocking=*/true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {

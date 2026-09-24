@@ -67,7 +67,10 @@ protected:
     experimental::PrefetcherPipe make_pipe(
         distributed::MeshDevice* device, CoreCoord sender, const CoreRangeSet& receivers, uint32_t ring_size);
 
-    bool is_fast_dispatch() const { return MetalContext::instance().rtoptions().get_fast_dispatch(); }
+    bool is_fast_dispatch() const {
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        return rtoptions.get_fast_dispatch() || rtoptions.get_emule_fast_dispatch();
+    }
 
     bool is_quasar() const { return this->arch_ == tt::ARCH::QUASAR; }
 
