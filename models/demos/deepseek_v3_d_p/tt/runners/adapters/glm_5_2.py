@@ -3,20 +3,20 @@
 
 """GLM-5.2 prefill adapter.
 
-Same serving shape as GLM-5.1 (``adapters/glm_5_1.py``): a DSA (sparse-attention) MLA + MoE model, so
+A DSA (sparse-attention) MLA + MoE model, so
 it subclasses ``MLAPrefillAdapter``, allocates the uncompressed bf16/ROW_MAJOR MLA KVPE cache plus the
 block-cyclic lightning-indexer KEY cache, and inherits ``build_runtime`` / ``weight_cache_path``. GLM
-diverges from the dense family the same two ways GLM-5.1 does — a DSA indexer (resolved from the
+diverges from the dense family two ways — a DSA indexer (resolved from the
 config's ``index_*`` attrs at model-build time) and a hand-built config (``glm_moe_dsa`` isn't
 AutoConfig-loadable).
 
-GLM-5.2 delta vs 5.1 = **cross-layer DSA indexer reuse**: only ``full`` layers run the indexer; the
+GLM-5.2 uses **cross-layer DSA indexer reuse**: only ``full`` layers run the indexer; the
 following ``shared`` layers reuse the most recent full layer's top-k selection. That is entirely
 CONFIG-DRIVEN — ``glm_5_2_hf_config`` carries the ``indexer_types`` full/shared map, and the transformer
 / ttMLA read it to bind ``TtIndexer`` (full) vs ``ReuseIndexer`` (shared) and to inject the reused
 indices — so no reuse-specific wiring lives in the adapter.
 
-Like GLM-5.1 (and Kimi) it has a single expert group with a device gate, so the MoE routing all-gather's
+Like Kimi it has a single expert group with a device gate, so the MoE routing all-gather's
 semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open).
 """
 
@@ -40,7 +40,7 @@ class GLM52Adapter(MLAPrefillAdapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
-    # 1216, not GLM-5.1's 1152: the tp_sharded fallback gather (used wherever the snake ring
+    # 1216: the tp_sharded fallback gather (used wherever the snake ring
     # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
     l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
@@ -58,7 +58,7 @@ class GLM52Adapter(MLAPrefillAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
-        and index 1 as the secondary index cache). Mirrors glm_5_1.py:
+        and index 1 as the secondary index cache):
 
           * index 0 — the MLA KVPE cache. sparse_sdpa reads it natively and requires it UNCOMPRESSED
             (bf16 ROW_MAJOR), not the dense bf8/TILE cache the base MLA adapter allocates. All layers.
@@ -69,7 +69,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             ``TtIndexer``). Like the KVPE cache it holds THIS pipeline stage only, so its slots are
             numbered from this stage's first full layer and the migration table needs no extra stride.
             ``full_indexer_rank`` degenerates to the layer count without an ``indexer_types`` map
-            (GLM-5.1: every layer is full).
+            (every layer is full).
 
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
@@ -124,7 +124,7 @@ class GLM52Adapter(MLAPrefillAdapter):
         return None if not types else {i for i in range(num_layers) if types[i] == "full"}
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
-    # FP8 repo, mirroring GLM-5.1 (a bf16 checkout would diverge from an FP8-derived trace).
+    # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace).
     hf_repo_id = "zai-org/GLM-5.2-FP8"
     env_var = "GLM52_HF_MODEL"
     mla_ref_cache_env = "GLM52_MLA_REF_CACHE"
