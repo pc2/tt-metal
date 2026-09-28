@@ -332,7 +332,7 @@ class TestConfig:
             case ChipArchitecture.QUASAR:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
-                TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
+                TestConfig.ARCH_DEFINE = "-DARCH_QUASAR -v -save-temps=obj -fdump-tree-all -fdump-rtl-all"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
