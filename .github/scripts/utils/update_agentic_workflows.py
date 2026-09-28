@@ -119,11 +119,17 @@ def ensure_gh_aw_binary(version):
     if os.path.isfile(binary_path):
         return binary_path
 
-    os.makedirs(binary_dir, exist_ok=True)
     expected_sha256 = download_checksum(version, asset)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_binary = os.path.join(tmp, "gh-aw")
+    # Download straight into the destination directory (as a .partial file) rather than a
+    # separate system tempdir: os.replace() below must stay within one filesystem to be
+    # atomic, and /tmp vs. the cache root aren't guaranteed to share one. The `finally`
+    # guarantees no partial download or empty version directory survives a failed attempt —
+    # nothing this function creates outlives a successful run except the verified binary
+    # itself.
+    os.makedirs(binary_dir, exist_ok=True)
+    partial_path = binary_path + ".partial"
+    try:
         subprocess.run(
             [
                 "gh",
@@ -135,13 +141,13 @@ def ensure_gh_aw_binary(version):
                 "--pattern",
                 asset,
                 "--output",
-                tmp_binary,
+                partial_path,
                 "--clobber",
             ],
             check=True,
         )
 
-        actual_sha256 = sha256_of(tmp_binary)
+        actual_sha256 = sha256_of(partial_path)
         if actual_sha256 != expected_sha256:
             print(
                 f"::error::Checksum mismatch for gh-aw {version} ({asset}): "
@@ -150,8 +156,16 @@ def ensure_gh_aw_binary(version):
             )
             sys.exit(1)
 
-        os.chmod(tmp_binary, 0o755)
-        os.replace(tmp_binary, binary_path)
+        os.chmod(partial_path, 0o755)
+        os.replace(partial_path, binary_path)
+    finally:
+        if os.path.exists(partial_path):
+            os.remove(partial_path)
+        if not os.path.isfile(binary_path):
+            try:
+                os.rmdir(binary_dir)
+            except OSError:
+                pass  # not empty (e.g. a concurrent run already placed it) — fine either way
 
     return binary_path
 
