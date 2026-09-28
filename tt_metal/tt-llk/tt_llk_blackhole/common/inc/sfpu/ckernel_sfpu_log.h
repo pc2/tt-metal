@@ -61,6 +61,40 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     sfpi::dst_reg[dst_idx * dst_tile_size_sfpi] = result;
 }
 
+/**
+ * @brief ln(in) of a value already in a register: the arithmetic of _calculate_log_body_<false>
+ * (same constants, so _init_log_ must have run) without its Dest load and store.
+ *
+ * For a caller that holds its operand in a register, this avoids the Dest store/reload round
+ * trips that _calculate_log_body_ would need (two SFPSTOREs and two SFPLOADs per row).
+ *
+ * The -inf lane is every input whose biased exponent is 0, i.e. +-0 *and* the denormals.
+ * That is what a caller that stores its operand to Dest and runs _calculate_log_body_ gets:
+ * SFPSTORE flushes a denormal to zero (measured on Blackhole, fp32 and bf16 Dest), so the
+ * in-place body only ever sees 0 there. Testing `in == 0.0F` instead would return a finite
+ * ~-87.3..-103.3 for those inputs.
+ */
+sfpi_inline sfpi::vFloat _calculate_log_body_on_reg_(const sfpi::vFloat in)
+{
+    sfpi::vFloat x             = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat a             = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat b             = sfpi::vConstFloatPrgm2;
+    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.11263230f) + -1.49277612f;
+
+    auto exp               = sfpi::convert<sfpi::vSMag>(sfpi::exexp(in));
+    sfpi::vFloat expf      = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
+    sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+
+    v_if (sfpi::exexp(in, sfpi::ExponentMode::Biased) == 0)
+    {
+        result = -std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+
+    return result;
+}
+
 sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 {
     // Normalize base to calculation range
