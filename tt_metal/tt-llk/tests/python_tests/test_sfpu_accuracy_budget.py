@@ -16,6 +16,7 @@ the wrong row is a silently wrong gate rather than an error, so the file guards:
 """
 
 import functools
+import itertools
 import math
 import re
 import textwrap
@@ -49,7 +50,12 @@ from helpers.sfpu_accuracy_budget import (
     usable_budget_ceiling,
     validate_registry,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
+from helpers.sfpu_domains import (
+    _UNARY_OPS_NOT_SWEPT,
+    exclude_undefined,
+    for_op_pipeline,
+    sfpu_unary_ops,
+)
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
     _ULP_DTYPES,
@@ -460,6 +466,51 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
         assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
+def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol(
+    monkeypatch,
+):
+    """The sweep writes a numberless ``metric: tolerance`` row for every cell past the
+    ceiling. It beats a shared ``atol`` row on specificity, and resolving it as-is gave
+    SigmoidAppx the per-format default: eight device failures no host test saw."""
+    op = MathOperation.Abs
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {
+            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(
+                input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+            ): AccuracyContract(metric=Metric.TOLERANCE),
+            BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.5, rtol=0.5
+            ),
+        },
+    )
+    bare_cell = accuracy_contract(
+        op,
+        input_format=DataFormat.Float16_b,
+        output_format=DataFormat.Float16_b,
+        arch=MEASURED_ARCH,
+    )
+    assert bare_cell.metric is Metric.TOLERANCE
+    assert bare_cell.atol == 0.13 and bare_cell.rtol == 0.05
+    # The most specific numbered row still wins where there is one.
+    numbered = accuracy_contract(
+        op, output_format=DataFormat.Float32, arch=MEASURED_ARCH
+    )
+    assert numbered.atol == 0.5
+    # With only bare rows there is nothing to fall through to.
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {BudgetKey(output_format=DataFormat.Float16_b): TOLERANCE_CONTRACT},
+    )
+    only_bare = accuracy_contract(
+        op, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+    )
+    assert only_bare == TOLERANCE_CONTRACT
+
+
 @pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
 def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
     """A row keyed on an arch was measured there, so the arch downgrade exempts it."""
@@ -641,17 +692,26 @@ def test_enrolled_ops_is_sorted_and_stable():
     assert len(set(ops)) == len(ops)
 
 
-#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair and two binaries
-#: whose per-format tolerances moved into the table. Sign and Heaviside are not here:
-#: WH reads -0.0 as negative, so they carry budgets only on the cells where that lane
-#: is not in play. Nor are GeluTanh, Tanhshrink and SfpuElwmul: per variant, some of
-#: their cells are inside the ceiling, and the rest fall through to tolerance.
+#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
+#: whose per-format tolerances moved into the table, and six transcendentals whose
+#: *best* cell is already past its output's usable ceiling (7 bf16, 52 fp16, 26
+#: Bfp8_b): Erfc 376, Xielu 512, Polygamma 614, Softplus 6,416, Lgamma 32,295 and
+#: Digamma 33,840 steps. Lgamma's worst, 2.3e9, is issue #55356.
+#:
+#: Sign, Heaviside, GeluTanh, Tanhshrink and SfpuElwmul are not here: per variant, some
+#: of their cells are inside the ceiling, and the rest fall through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.Erfc,
+        MathOperation.Xielu,
+        MathOperation.Polygamma,
+        MathOperation.Softplus,
+        MathOperation.Lgamma,
+        MathOperation.Digamma,
     }
 )
 
@@ -667,7 +727,7 @@ def test_every_enrolled_op_reaches_its_step_budget():
         for op, table in _SFPU_ACCURACY_BUDGET.items()
         if any(key.input_format is not None for key in table)
     }
-    assert len(input_keyed) == 69, sorted(op.name for op in input_keyed)
+    assert len(input_keyed) == 130, sorted(op.name for op in input_keyed)
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
@@ -773,19 +833,28 @@ _EXACT_OP_DEMOTIONS = {
     **{
         (op, in_fmt, DataFormat.Float16, DestAccumulation.Yes): "512 ULP measured"
         for op in (MathOperation.Abs, MathOperation.Neg, MathOperation.Identity)
-        for in_fmt in (DataFormat.Float16_b, DataFormat.Bfp8_b)
-    },
-    (
-        MathOperation.Floor,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
-        DestAccumulation.Yes,
-    ): "15360 ULP measured",
-    **{
-        (MathOperation.Floor, DataFormat.Bfp8_b, DataFormat.Float16_b, dest): (
-            "16129 ULP measured"
+        for in_fmt in (
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Float32,
         )
-        for dest in DestAccumulation
+    },
+    **{
+        (MathOperation.Floor, in_fmt, out_fmt, dest): measured
+        for in_fmt in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        for out_fmt, dests, measured in (
+            (DataFormat.Float16_b, DestAccumulation, "16129 ULP measured"),
+            (DataFormat.Float16, (DestAccumulation.Yes,), "15360 ULP measured"),
+            (DataFormat.Float32, DestAccumulation, "1056964609 ULP measured"),
+        )
+        for dest in dests
+    },
+    **{
+        (op, DataFormat.Float32, DataFormat.Float16, DestAccumulation.No): (
+            "15360 ULP measured"
+        )
+        for op in (MathOperation.Floor, MathOperation.Ceil)
     },
 }
 
@@ -857,19 +926,18 @@ def test_no_budget_exceeds_its_formats_usable_ceiling():
 def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
     for fmt in ULP_FORMATS:
         assert usable_budget_ceiling(fmt) < MAX_MEANINGFUL_ULP[ulp_dtype(fmt)], fmt.name
-    assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
+    assert usable_budget_ceiling(DataFormat.Float16_b) == 7  # 6.4, rounded up
 
 
 def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     """In a shared-exponent block a small element next to a large one quantizes to zero,
-    so even Abs reaches 15616 bf16 steps. Integers in a bounded range escape that, and
-    so does Fill, whose single constant makes every block uniform. A new op here must
-    produce block-friendly values; raising its budget is not the answer.
+    so even Abs reaches 15616 bf16 steps. Integers in a bounded range escape that. A new
+    op here must produce block-friendly values; raising its budget is not the answer.
 
     The exhaustive sweep enrols no block-float cell: it walks the format in value order,
     so adjacent values share a block -- the best case, not a representative one.
-    Threshold is absent for that reason, as is every op enrolled only through a sampled
-    ``{in: Bfp4_b|Float32, out: Bfp8_b}`` row: those 0s and 13-to-25s are the block
+    Threshold and Fill are absent for that reason, as is every op enrolled only through
+    a sampled ``{in: Bfp4_b|Float32, out: Bfp8_b}`` row: those 0s and 13-to-25s are the block
     exponent fitting a narrow stimulus (Threshold's never crossed the threshold; the
     exhaustive sweep reads 16545). They are recorded as tolerance.
 
@@ -877,9 +945,7 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     would clear both the 25.6-step ceiling and provenance.
     """
     on_bfp8 = {op for op, _, fmt, _ in _live_step_budgets() if fmt is DataFormat.Bfp8_b}
-    assert on_bfp8 == {*INTEGER_VALUED, MathOperation.Fill}, sorted(
-        op.name for op in on_bfp8
-    )
+    assert on_bfp8 == set(INTEGER_VALUED), sorted(op.name for op in on_bfp8)
 
 
 @pytest.mark.parametrize("op", INTEGER_VALUED, ids=lambda op: op.name)
@@ -900,9 +966,7 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
 ):
     """Bfp8_b holds integers exactly only while every block maximum stays below
     ``BFP8_B_EXACT_INTEGER_DOMAIN``. That is a property of the op's stimulus domain,
-    which may depend on the input format, so it is checked per pipeline. Fill is not
-    checked: its constant output lies outside its input range, so this would pin
-    nothing."""
+    which may depend on the input format, so it is checked per pipeline."""
     spec = exclude_undefined(
         op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A
     )
@@ -929,6 +993,46 @@ def test_no_step_budget_is_keyed_on_a_format_without_a_per_element_ulp():
                     f"{key.output_format.name}, which has no per-element ULP, so the "
                     "number gates nothing."
                 )
+
+
+def test_no_declared_tolerance_is_shadowed_by_a_numberless_row():
+    """The live-table form of the bare-row test: every variant an op's numbered
+    tolerance row covers resolves to that tolerance or to a step budget, never to the
+    per-format default."""
+    shadowed = []
+    for op, table in _SFPU_ACCURACY_BUDGET.items():
+        numbered = [
+            key
+            for key, contract in table.items()
+            if contract.metric is Metric.TOLERANCE
+            and (contract.atol is not None or contract.rtol is not None)
+        ]
+        if not numbered:
+            continue
+        input_formats = sorted(
+            {key.input_format for key in table} - {None}, key=lambda f: f.name
+        ) + [None]
+        for dims in itertools.product(
+            [*ApproximationMode, None],
+            input_formats,
+            ULP_CAPABLE_FORMATS,
+            [*DestAccumulation, None],
+            ChipArchitecture,
+        ):
+            query = BudgetKey(*dims)
+            if not any(key.matches(query) for key in numbered):
+                continue
+            contract = accuracy_contract(
+                op,
+                approx_mode=query.approx_mode,
+                input_format=query.input_format,
+                output_format=query.output_format,
+                dest_acc=query.dest_acc,
+                arch=query.arch,
+            )
+            if contract == TOLERANCE_CONTRACT:
+                shadowed.append(f"{op.name} {query.describe()}")
+    assert not shadowed, "\n".join(shadowed[:20])
 
 
 def test_no_integer_only_op_is_enrolled():
@@ -1069,3 +1173,20 @@ def test_no_step_budget_exceeds_the_measurement_it_records():
                 f"{where}: budget {budget} is more than "
                 f"{MEASUREMENT_HEADROOM}x the measurement"
             )
+
+
+def test_every_unary_op_is_enrolled_or_excused():
+    """ "Never measured" and "deliberately left on tolerance" both read as absent from
+    the table, and the emitter cannot create an op's block. So every unary op either
+    has one or ``_UNARY_OPS_NOT_SWEPT`` says why not (Erfc, Lgamma and Xielu sat here).
+    """
+    unaccounted = sorted(
+        set(sfpu_unary_ops()) - set(enrolled_ops()) - set(_UNARY_OPS_NOT_SWEPT),
+        key=lambda op: op.name,
+    )
+    assert not unaccounted, (
+        "no accuracy contract, and no reason given, for: "
+        + ", ".join(op.name for op in unaccounted)
+        + ". Measure it with --ulp-emit (add the op's key line to the table first), or "
+        "add it to _UNARY_OPS_NOT_SWEPT with why it cannot be swept."
+    )

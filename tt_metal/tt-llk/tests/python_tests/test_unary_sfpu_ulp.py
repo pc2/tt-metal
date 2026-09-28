@@ -9,7 +9,7 @@ them. Approximate ``Reciprocal`` reads 1 ULP there and 128 ULP over every bf16 v
 
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
-in. Run it as a gate (the nightly default)::
+in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead. Run it as a gate (the nightly default)::
 
     pytest test_unary_sfpu_ulp.py
 
@@ -65,7 +65,7 @@ from helpers.ulp_sweep import (
     sweep_cells,
     sweep_spec,
 )
-from helpers.utils import passed_test
+from helpers.utils import _record_ulp_measurement, passed_test
 
 #: ~7 minutes of 64-tile device runs. `accuracy` is the marker every LLK workflow
 #: deselects; `nightly` is deselected only by the PR gate, so llk-e2e would still run it.
@@ -84,7 +84,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         input_dimensions_A=SWEEP_DIMENSIONS,
         stimuli_format_B=stimuli_format,
         input_dimensions_B=SWEEP_DIMENSIONS,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop,
@@ -204,7 +204,8 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     mask = measurable_mask(src, golden, result, in_fmt)
     overflowed = nonfinite_failures(mathop, src, golden, result, in_fmt, out_fmt)
-    stats = ulp_stats(ulp_distance(golden, result), mask)
+    distance = ulp_distance(golden, result)
+    stats = ulp_stats(distance, mask)
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
@@ -237,6 +238,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     if ulp_sweep.EMIT:
         ulp_sweep.record(mathop.name, key, int(stats["max"]))
+        # Also the JSONL row `--ulp-measure` writes from inside passed_test, which this
+        # branch skips; under xdist the workers' MEASURED never reaches the controller.
+        _record_ulp_measurement(distance, mask=mask, output_data_format=out_fmt)
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
