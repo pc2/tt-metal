@@ -54,6 +54,16 @@ ttnn::Tensor sparse_sdpa_msa(
             q_isl,
             q_isl * tp);
         block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
+        // The rotation-exact causal geometry reads the SP rank off cluster_axis, so it must be the axis the cache
+        // was striped over. The device op can only compare extents (the layout keeps sp, not the axis), which a
+        // square mesh passes with the wrong axis; the axis itself is only known here.
+        const bool causal = chunk_start_idx.has_value() || chunk_start_idx_tensor.has_value();
+        TT_FATAL(
+            !causal || !cluster_axis.has_value() || *cluster_axis == sp_axis,
+            "sparse_sdpa_msa: causal block-cyclic cluster_axis ({}) must be the SP axis the cache was striped over "
+            "(block_cyclic_sp_axis {})",
+            cluster_axis.value_or(0),
+            sp_axis);
     }
 
     // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
