@@ -322,6 +322,9 @@ def test_a_more_specific_key_wins_over_the_default(broad, narrow):
 
 
 def test_specificity_counts_every_set_dimension():
+    """The only comparison of two non-DEFAULT keys. The Fill rows stack 1-, 2- and
+    4-field keys on one op, and only an equal-specificity tie raises, so a miscount
+    would silently repoint budgets."""
     table = {
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
         BudgetKey(
@@ -499,6 +502,32 @@ def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(enrolled):
         accuracy_contract(op, output_format=DataFormat.Float32, arch="wormhole")
 
 
+def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch):
+    """``--ulp-measure`` files a reading under the last variant looked up, and refuses
+    two lookups racing one comparison -- but only within one test. The exhaustive sweep
+    resolves a contract and then skips a tolerance cell; flagging that dropped every
+    reading that followed a skip (40 of 130 tests, measured)."""
+    import helpers.sfpu_accuracy_budget as budget
+
+    def resolve(test_id):
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{test_id} (call)")
+        accuracy_contract(
+            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+        )
+
+    monkeypatch.setattr(budget, "LAST_QUERY", None)
+    monkeypatch.setattr(budget, "PENDING_AMBIGUOUS", False)
+
+    resolve("t_one")
+    resolve("t_two")
+    assert not budget.PENDING_AMBIGUOUS
+    assert budget.LAST_QUERY[0] == "t_two"
+
+    resolve("t_three")
+    resolve("t_three")
+    assert budget.PENDING_AMBIGUOUS
+
+
 def test_arch_must_be_passed_explicitly():
     """The one dimension whose numbers do not transfer cannot default to Wormhole."""
     with _refuses("arch", TypeError):
@@ -612,20 +641,17 @@ def test_enrolled_ops_is_sorted_and_stable():
     assert len(set(ops)) == len(ops)
 
 
-#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, and three ops past the usable
-#: ceiling on every float column (measurements on their YAML rows). Sign and Heaviside
-#: are not here: WH reads -0.0 as negative, so they carry budgets only on the cells
-#: where that lane is not in play.
+#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair and two binaries
+#: whose per-format tolerances moved into the table. Sign and Heaviside are not here:
+#: WH reads -0.0 as negative, so they carry budgets only on the cells where that lane
+#: is not in play. Nor are GeluTanh, Tanhshrink and SfpuElwmul: per variant, some of
+#: their cells are inside the ceiling, and the rest fall through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.GeluTanh,
-        MathOperation.Tanhshrink,
-        MathOperation.SfpuElwmul,
     }
 )
 
@@ -641,7 +667,7 @@ def test_every_enrolled_op_reaches_its_step_budget():
         for op, table in _SFPU_ACCURACY_BUDGET.items()
         if any(key.input_format is not None for key in table)
     }
-    assert len(input_keyed) == 54, sorted(op.name for op in input_keyed)
+    assert len(input_keyed) == 69, sorted(op.name for op in input_keyed)
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
@@ -842,11 +868,18 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
 
     The exhaustive sweep enrols no block-float cell: it walks the format in value order,
     so adjacent values share a block -- the best case, not a representative one.
-    Threshold is absent for that reason: its sampled 0 never crossed the threshold, and
-    the exhaustive sweep reads 16545.
+    Threshold is absent for that reason, as is every op enrolled only through a sampled
+    ``{in: Bfp4_b|Float32, out: Bfp8_b}`` row: those 0s and 13-to-25s are the block
+    exponent fitting a narrow stimulus (Threshold's never crossed the threshold; the
+    exhaustive sweep reads 16545). They are recorded as tolerance.
+
+    The bound is on membership: a regenerated Abs at the 3 steps a sorted sweep reads
+    would clear both the 25.6-step ceiling and provenance.
     """
     on_bfp8 = {op for op, _, fmt, _ in _live_step_budgets() if fmt is DataFormat.Bfp8_b}
-    assert on_bfp8 == {*INTEGER_VALUED, MathOperation.Fill}
+    assert on_bfp8 == {*INTEGER_VALUED, MathOperation.Fill}, sorted(
+        op.name for op in on_bfp8
+    )
 
 
 @pytest.mark.parametrize("op", INTEGER_VALUED, ids=lambda op: op.name)
