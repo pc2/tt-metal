@@ -94,17 +94,18 @@ case "${CONFIG}" in
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
 
-# Runner-side only: this is the count the ranks ALLOCATE for, and it is what the capacity ceiling means.
-# The manifest count is the sc4 ceiling and no other SKU holds it -- sc1 puts all 61 layers on one rank,
+# Both shells run this count: the ranks allocate for it and the producer fills it, so a producer that
+# drives fewer slots than the ranks allocated measures a machine the ceiling does not describe. The
+# manifest count is the sc4 ceiling and no other SKU holds it -- sc1 puts all 61 layers on one rank,
 # which leaves far less DRAM for caches. Those SKUs gate plumbing rather than capacity, so they run the
 # single slot the golden covers. The export is explicit because the rank and producer shells receive a
 # fixed export list: a value exported into this script does not reach them on its own.
-RUNNER_NUM_USERS=""
+NUM_USERS_EXPORT=""
 if [ "${CONFIG}" != sc4 ]; then
-  RUNNER_NUM_USERS="export PREFILL_NUM_USERS=1; "
+  NUM_USERS_EXPORT="export PREFILL_NUM_USERS=1; "
 fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
-  RUNNER_NUM_USERS="export PREFILL_NUM_USERS=${PREFILL_NUM_USERS}; "
+  NUM_USERS_EXPORT="export PREFILL_NUM_USERS=${PREFILL_NUM_USERS}; "
 fi
 
 # The CI descriptors are per-SKU, not per-model; sc2 has none, so fall back to the shared 2-galaxy one
@@ -210,7 +211,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    ${RUNNER_NUM_USERS}\
+    ${NUM_USERS_EXPORT}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
@@ -294,10 +295,10 @@ set +e
 # --mca btl_tcp_if_include is REQUIRED, not tuning: without it MPI_Init never completes and every rank
 # logs "applied manifest" then goes silent forever (no error). ttrun passes the same transport args to
 # the runner above, so the producer must match them or only this leg hangs.
-# PREFILL_NUM_USERS=1 here is deliberately NOT the runner count: the producer sizes its slot pool from
-# it and then PCCs every slot it filled, reading all 61 layers back per slot. Every slot replays the one
-# golden, so the runner count would buy identical PCCs at ~26 s each -- 30 min at the sc4 ceiling, past
-# the leg timeout. One slot is the whole accuracy signal; the ceiling is gated by what the ranks allocate.
+# PREFILL_PCC_MAX_SLOTS caps the readback, not the workload: every slot replays the one golden, so
+# checking them all buys identical PCCs at ~26 s a slot -- 30 min at the sc4 ceiling, past the leg
+# timeout. One slot is the whole accuracy signal. The slots are still all filled, which is what the
+# ceiling measures.
 "${MPIRUN}" \
   --host "${PRODUCER_HOSTS}" --map-by "rankfile:file=${RANKFILE_REL}" --bind-to none --tag-output \
   --wdir "${TT_METAL_HOME}" \
@@ -309,7 +310,8 @@ set +e
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=1; \
+    ${NUM_USERS_EXPORT}\
+    export PREFILL_PCC_MAX_SLOTS=1; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \

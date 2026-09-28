@@ -1309,10 +1309,16 @@ def _verify_resident_slots(
     checked = 0
     failures = []
     dflash_failures = []
-    for slot_id, res in sorted(stats.resident.items()):
+    # Every filled slot replays the same golden, so checking them all reads all 61 layers back over PCIe
+    # per slot for the same number. A caller that wants only the accuracy signal caps the readback here;
+    # the slots stay filled, so the workload the ranks were sized for is unchanged.
+    filled = [(slot_id, res) for slot_id, res in sorted(stats.resident.items()) if res.real_len > 0]
+    max_slots = int(os.environ.get("PREFILL_PCC_MAX_SLOTS", "0"))
+    if 0 < max_slots < len(filled):
+        logger.info(f"[producer] PCC capped to the first {max_slots} of {len(filled)} filled slots")
+        filled = filled[:max_slots]
+    for slot_id, res in filled:
         real_len = res.real_len
-        if real_len <= 0:
-            continue
         slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
