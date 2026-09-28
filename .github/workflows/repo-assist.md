@@ -372,4 +372,3 @@ Only override the defaults above when the issue specifically requires it (e.g. a
 - **Quality over quantity**: noise erodes trust. Do nothing rather than add low-value output.
 
 <!-- e2e test marker for the compile-agentic-workflows pre-commit hook (PR #57916) -->
-
