@@ -220,7 +220,6 @@ def _enumerate_representable(
         dtype = (
             torch.bfloat16 if stimuli_format == DataFormat.Float16_b else torch.float16
         )
-        strided_in_walk = False
         all_bits = torch.arange(0, 2**16, dtype=torch.int16)
         all_vals = all_bits.view(dtype).to(torch.float32)
         # 16-bit enumerates the whole domain up front, so the offset is applied
@@ -230,7 +229,6 @@ def _enumerate_representable(
         dtype = torch.float32
         # float32 applies the offset inside the walk (jumps straight to it), so
         # the slice below starts at 0.
-        strided_in_walk = stride > 1
         all_vals = _enumerate_fp32_in_range(low, high, max_elements, offset, stride)
         slice_start = 0
     else:
@@ -248,9 +246,9 @@ def _enumerate_representable(
         unique_mask = torch.cat([torch.tensor([True]), vals[1:] != vals[:-1]])
         vals = vals[unique_mask]
 
-    if stride > 1 and not strided_in_walk:
+    if stimuli_format != DataFormat.Float32:
         # The 16-bit formats enumerate their whole domain first, so they stride here;
-        # float32 has already strided inside the walk above and must not do it twice.
+        # float32 already strided inside the walk above.
         vals = vals[::stride]
     vals = vals[slice_start : slice_start + max_elements]
 
@@ -316,7 +314,7 @@ class UlpSweepStrategy:
             spec.low,
             spec.high,
             num_elements,
-            getattr(spec, "stride", 1),
+            spec.stride,
             spec.offset,
         )
         n = vals.numel()

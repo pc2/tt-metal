@@ -35,10 +35,8 @@ SWEEP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float32,
 )
 
-#: Formats the sweep drives as an *input* but never judges as an output. Bfp4_b keeps
-#: 2 fractional bits, so a bf16 step count would read every legal quantization of its
-#: output as a 32-step error -- but it is a perfectly good thing to feed, and gated
-#: cells do take it.
+#: Fed as an *input* but never judged as an output: Bfp4_b keeps 2 fractional bits, so
+#: a bf16 step count would read each legal quantization of its output as 32 steps.
 SWEEP_INPUT_ONLY_FORMATS: Tuple[DataFormat, ...] = (DataFormat.Bfp4_b,)
 
 #: Every format the sweep feeds, whether or not it can judge a result in it.
@@ -52,13 +50,10 @@ _STIMULI_FORMAT: Dict[DataFormat, DataFormat] = {
     DataFormat.Bfp4_b: DataFormat.Float16_b,
 }
 
-#: Float32 has 2**32 values and one device run holds 2**16, so it cannot be enumerated.
-#: Striding the total order by this much samples it evenly instead: every binade holds
-#: the same number of representable values, so each gets an equal share, and one run
-#: reaches 261 binades from 0 to 3.4e38. A consecutive walk covers a millionth of one
-#: binade and would call that a measurement.
-#:
-#: This is the one place the sweep is a *sample* rather than exhaustive.
+#: Float32 has 2**32 values and one run holds 2**16, so it is the one input the sweep
+#: samples rather than enumerates. Striding the total order gives every binade an equal
+#: share (each holds the same number of values); a consecutive walk would cover a
+#: millionth of one binade.
 _FP32_STRIDE = 2**16
 
 #: A top-level op key in the table.
@@ -101,23 +96,24 @@ def is_exhaustive(input_format: DataFormat) -> bool:
     return stimuli_format_for(input_format) != DataFormat.Float32
 
 
+def _stride_for(input_format: DataFormat) -> int:
+    return 1 if is_exhaustive(input_format) else _FP32_STRIDE
+
+
 @lru_cache(maxsize=None)
 def swept_value_count(input_format: DataFormat) -> int:
-    """How many values the sweep actually generates for *input_format*.
+    """How many values the sweep generates for *input_format* -- not how many the
+    format has, which for float32 is 2**32 against the 2**16 generated.
 
-    Not ``ulp_sweep_value_count``, which answers how many the format *has*: 2**32 for
-    float32, where the sweep generates 2**16 of them.
-
-    Cached because the answer is a property of the format and the walk, while finding
-    it enumerates the whole format: 2.4 ms a call, and `padding_lanes` asks twice per
-    variant, which is ~37 s of recomputation across an emit run over five formats.
+    Cached: finding it enumerates the whole format, and `padding_lanes` asks twice per
+    variant.
     """
     from helpers.stimuli_generator.strategies.structured import (
         _enumerate_representable,
     )
 
     fmt = stimuli_format_for(input_format)
-    stride = 1 if is_exhaustive(input_format) else _FP32_STRIDE
+    stride = _stride_for(input_format)
     return int(_enumerate_representable(fmt, -_INF, _INF, 2**16, stride).numel())
 
 
@@ -130,8 +126,7 @@ def sweep_spec(input_format: DataFormat = DataFormat.Float16_b) -> StimuliSpec:
     undefined inputs reaching hardware at all. They are swept and then masked out of the
     statistics by :func:`measurable_mask`, so the run still exercises them.
     """
-    stride = 1 if is_exhaustive(input_format) else _FP32_STRIDE
-    return StimuliSpec.ulp_sweep(low=-_INF, high=_INF, stride=stride)
+    return StimuliSpec.ulp_sweep(low=-_INF, high=_INF, stride=_stride_for(input_format))
 
 
 def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
@@ -485,15 +480,11 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     ceiling = usable_budget_ceiling(DataFormat[out_fmt])
     if budget > ceiling:
         if measured <= ceiling:
-            # The kernel meets the gate; only the headroom does not. Exp measures 7 on
-            # a bf16 output whose ceiling is 7, and 1.1x made that 8 -- refusing the
-            # only step gate Exp could have on bf16 over rounding. Cap at the ceiling:
-            # a budget sitting exactly on it is still stronger than the tolerance it
-            # replaces, and zero slack means any drift fails, which is what a gate is
-            # for. 14 cells on the 2026-09-25 sweep, all Exp.
+            # The kernel meets the gate and only the headroom does not (Exp measures 7
+            # on bf16, ceiling 7). Cap at the ceiling: still stronger than the tolerance
+            # it replaces, with zero slack so any drift fails.
             return ("ulp", int(ceiling))
-        # The *budget* is what crosses the line, not the measurement, so the row's
-        # comment names both and the claim stays checkable.
+        # The budget crosses the line, not the measurement; the row names both.
         return ("tolerance", budget)
     return ("ulp", budget)
 

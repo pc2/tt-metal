@@ -449,22 +449,18 @@ def accuracy_contract(
         return TOLERANCE_CONTRACT
     key, contract = found
     if contract.metric is Metric.ULP:
-        # A step count is trustworthy only where the format has a per-element ULP --
-        # the block floats' lattice compares are the stronger criterion -- and only on
-        # the architecture it was measured on, which for an unkeyed row is
-        # MEASURED_ARCH. A row whose own key names `arch` was measured there and is
-        # exempt. Anywhere else the cell downgrades onto the tolerance the op declares.
+        # A step count binds only where the format has a per-element ULP (block floats
+        # keep their lattice compares) and on the arch it was measured on: MEASURED_ARCH
+        # for an unkeyed row, or the arch the row's own key names.
         if has_ulp_gate(output_format) and (
             arch == MEASURED_ARCH or key.arch is not None
         ):
             return contract
         return _declared_tolerance(table, query, op.name, TOLERANCE_CONTRACT)
     if contract.atol is None and contract.rtol is None:
-        # A tolerance row with no numbers opts its cell *out of the ULP metric*; it does
-        # not retract an atol/rtol the op declares on a broader row. The sweep emits
-        # such rows for every cell whose budget crossed the format's ceiling, keyed on
-        # (in, out, dest) -- more specific than the shared `atol 0.13` row SigmoidAppx
-        # and GeluAppx carry, which they shadowed straight back to the default.
+        # A numberless tolerance row opts its cell out of the ULP metric without
+        # retracting an atol/rtol the op declares on a broader row. The sweep emits one
+        # per over-ceiling cell, more specific than SigmoidAppx's shared `atol 0.13`.
         return _declared_tolerance(table, query, op.name, contract)
     return contract
 
