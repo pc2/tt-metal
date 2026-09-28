@@ -1,0 +1,54 @@
+name: "Gemma4 D_P layer perf"
+
+# Op-level perf of pre-selected Gemma4-31B-it prefill layers on a 14kW Galaxy (#57653).
+# Runs the gemma4_layer_perf leg of tests/pipeline_reorg/blaze_models_prefill_tests.yaml under
+# Tracy: global layer at chunks 0/1/15/31 and sliding layer at chunk 0 of 256k@8k. The job summary
+# carries the per-cell table; artifact layer-perf-* has the raw ops CSV and the per-cell
+# tt-perf-report slices. Its own build because Tracy must not change the nightly Blaze build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-inplace-wheel: true
+      tracy: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+
+  Galaxy-Gemma4-layer-perf:
+    needs: build-artifact
+    permissions:
+      id-token: write
+      contents: read
+    secrets: inherit
+    uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: bh_sc1_high_power
+      sp-config: sc1
+      include-test-group: gemma4_layer_perf
+      resource-prefix: gemma4-layer-perf
