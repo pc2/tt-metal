@@ -365,6 +365,10 @@ enum class BinaryOp : std::uint8_t
     // register, so it needs its own variant.
     NEXTAFTER      = 43,
     NEXTAFTER_BF16 = 44,
+    // calculate_mask_posinf (mask_posinf_tile) and the equal_nan=True instantiation of
+    // calculate_sfpu_isclose, which the MASK / ISCLOSE entries above do not reach.
+    MASK_POSINF       = 45,
+    ISCLOSE_EQUAL_NAN = 46,
 };
 
 enum class PackMode : std::uint8_t
