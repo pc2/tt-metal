@@ -493,14 +493,15 @@ class TtPrefillRuntime:
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
         consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
-        allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
+        allocates a slot for every layer, zeros on dense ones), so every stage carries the same range.
+        index_k is the migration copy when there is one (see ``MiniMaxKVCache.migration_index_k``)."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         return [
             KvCacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
-            for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
+            for t in (kv_cache.k, kv_cache.v, kv_cache.migration_index_k)
         ]
 
     def build_kv_chunk_table(

@@ -128,9 +128,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Allocate M3's regular TP-head-sharded triple KV cache (K / V / index_k), one shared cache of
         num_users * num_layers user-major slots. The engine owns the returned object and passes it into
-        every runtime call."""
+        every runtime call. With migration on (real or mock), index_k also gets a bf8 copy for the peer."""
         from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 
+        migration = any(os.environ.get(k, "0") == "1" for k in ("PREFILL_ENABLE_MIGRATION", "PREFILL_MOCK_MIGRATION"))
         return allocate_kv_caches(
             mesh_device,
             num_layers=params.num_layers,
@@ -138,6 +139,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
+            migration=migration,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

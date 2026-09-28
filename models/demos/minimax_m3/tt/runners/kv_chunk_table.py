@@ -15,6 +15,11 @@ so each (tensor, head) needs its OWN config with a single-member device group; `
     config N..2N-1  -> v head 0..N-1   (single-member group)
     config 2N       -> index_k         (replica group: all TP columns of the SP row)
 
+Configs are named by zero-padded position ("00".."08"), the names blaze's decode table uses: the KV manager
+pairs the two tables by config name and id, so both must match. ``index_k`` is read from
+``kv_cache.migration_index_k`` (the bf8 copy when prefill keeps index_k in bf16), because the worker copies raw
+bytes and the decode peer stores bf8.
+
 The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks, block-cyclic positions,
 user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_block_cyclic``, just
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
@@ -40,6 +45,13 @@ def _chunk_size_bytes(dtype, head_dim: int) -> int:
     except KeyError:
         raise AssertionError(f"unsupported KV cache dtype {dtype}; expected bfloat8_b or bfloat16")
     return (head_dim // 32) * tile_bytes
+
+
+def config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded positional config name, as blaze's ``kv_chunk_migration_helpers`` names its decode configs
+    (at least two digits). Sorted names keep ids in position order."""
+    width = max(2, len(str(num_configs - 1)))
+    return f"{config_id:0{width}d}"
 
 
 def _make_config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
@@ -99,7 +111,8 @@ def build_and_serialize_kv_chunk_table(
     )
     # Only THIS rank's cache is inspectable; in a pipeline every stage allocates the same way (same
     # model/env), so its dtypes and the slot fold generalize to the gathered stages.
-    for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", kv_cache.index_k)):
+    index_k = kv_cache.migration_index_k
+    for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", index_k)):
         assert (
             t.shape[0] == num_users * num_layers
         ), f"{name} cache batch dim {t.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
@@ -113,7 +126,7 @@ def build_and_serialize_kv_chunk_table(
         specs.append((f"k_h{h}", 0, [h], kv_cache.k.dtype))
     for h in range(num_kv_heads):
         specs.append((f"v_h{h}", 1, [h], kv_cache.v.dtype))
-    specs.append(("index_k", 2, list(range(cols)), kv_cache.index_k.dtype))
+    specs.append(("index_k", 2, list(range(cols)), index_k.dtype))
 
     if stage_layouts is None:
         # Single-rank: synthesize one one-stage layout per cache from the local mesh so both paths
@@ -133,7 +146,7 @@ def build_and_serialize_kv_chunk_table(
                     "fnids": local_fnids,
                 }
             ]
-            for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
+            for t in (kv_cache.k, kv_cache.v, index_k)
         ]
 
     from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
@@ -156,16 +169,17 @@ def build_and_serialize_kv_chunk_table(
                 f"space, so kv_migration_stages must report the same range for all three."
             )
 
-    configs = [
-        _make_config(
-            num_layers=total_layers,
-            max_seq_len=seq_len,
-            num_users=num_users,
-            chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
-        )
-        for (_, _, _, dtype) in specs
-    ]
-    table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
+    table = ttnn.experimental.disaggregation.KvChunkAddressTable(
+        {
+            config_name(i, len(specs)): _make_config(
+                num_layers=total_layers,
+                max_seq_len=seq_len,
+                num_users=num_users,
+                chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
+            )
+            for i, (_, _, _, dtype) in enumerate(specs)
+        }
+    )
 
     hosts_set = set()
 

@@ -3,6 +3,7 @@
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 
@@ -15,6 +16,11 @@ from models.demos.common.prefill.adapter import KvCaches
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
+# The dtype the migration peer stores index_k in. Blaze's M3 decode indexer (DsaIndexerDirectKCacheUpdate) only
+# supports bfp8 tiles, and the migration worker copies raw chunk bytes, so the migrated index_k must be bf8 even when
+# prefill keeps its own copy in bf16 (M3_INDEX_CACHE_BF16=1).
+MIGRATION_INDEX_K_DTYPE = ttnn.bfloat8_b
+
 
 @dataclass
 class MiniMaxKVCache(KvCaches):
@@ -26,6 +32,9 @@ class MiniMaxKVCache(KvCaches):
                          the sequence is SP-sharded block-cyclic on the ``sp`` rows.
       * ``index_k``    — MSA lightning-indexer key (one shared head, REPLICATED across the TP cols); only
                          the MSA layers populate it — dense layers leave their slots zeroed.
+      * ``index_k_migration`` — optional bf8 copy of ``index_k``, same layout, written alongside it. Allocated
+                         only when migration is on and ``index_k`` is not already bf8; the chunk table points
+                         at it so the peer receives its own dtype. Prefill itself never reads it.
 
     Batch dim is user-major (``slot = user_id * num_layers + layer_idx``) so each user's layers stay
     contiguous, matching ``update_padded_kv_cache``'s indexing. The adapter allocates this once and the
@@ -39,12 +48,19 @@ class MiniMaxKVCache(KvCaches):
     num_layers: int
     max_seq_len: int
     sp: int
+    index_k_migration: Optional[ttnn.Tensor] = None
+
+    @property
+    def migration_index_k(self) -> ttnn.Tensor:
+        """The index_k tensor the migration peer reads: the bf8 copy when there is one, else ``index_k``."""
+        return self.index_k if self.index_k_migration is None else self.index_k_migration
 
     def deallocate(self) -> None:
-        """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
+        """Free the device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
         model stays resident). The handle is dead afterwards; do not pass it into the runtime again."""
-        for t in (self.k, self.v, self.index_k):
-            ttnn.deallocate(t)
+        for t in (self.k, self.v, self.index_k, self.index_k_migration):
+            if t is not None:
+                ttnn.deallocate(t)
 
 
 def allocate_kv_caches(
@@ -56,6 +72,7 @@ def allocate_kv_caches(
     num_users=1,
     head_dim=128,
     cache_dtype=ttnn.bfloat8_b,
+    migration=False,
 ) -> MiniMaxKVCache:
     """Allocate the three external prefill KV caches (K, V, index_k). See :class:`MiniMaxKVCache`.
 
@@ -71,6 +88,8 @@ def allocate_kv_caches(
         num_users: independent user slots sharing the cache (1 for bring-up).
         head_dim: per-head width (128 for M3 main K/V and the index head alike).
         cache_dtype: on-device cache dtype (bf8 matches the DeepSeek substrate + the device golden check).
+        migration: the KV cache will be migrated to a decode peer. If index_k is not
+            ``MIGRATION_INDEX_K_DTYPE``, a same-layout copy in that dtype is allocated for the peer.
     """
     sp = mesh_device.shape[sp_axis]
     assert max_seq_len % sp == 0, f"max_seq_len ({max_seq_len}) must be divisible by sp ({sp})"
@@ -107,6 +126,10 @@ def allocate_kv_caches(
     # (M3_INDEX_CACHE_BF16=1) to keep selection stable; it's tiny (1 head) and only the indexer reads it.
     index_dtype = ttnn.bfloat16 if os.getenv("M3_INDEX_CACHE_BF16") == "1" else cache_dtype
 
+    index_k_migration = (
+        _alloc(MIGRATION_INDEX_K_DTYPE) if migration and index_dtype != MIGRATION_INDEX_K_DTYPE else None
+    )
+
     return MiniMaxKVCache(
         k=_alloc(),
         v=_alloc(),
@@ -115,6 +138,7 @@ def allocate_kv_caches(
         num_layers=num_layers,
         max_seq_len=max_seq_len,
         sp=sp,
+        index_k_migration=index_k_migration,
     )
 
 
@@ -171,13 +195,17 @@ def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_idx, layer
 
     tt_index_k is the single shared index head [1, 1, s_local, head_dim], SP-sharded on the rows and
     REPLICATED across the TP cols (so each col writes the same data into its replicated cache slot).
+    Also writes the migration copy when there is one (``_write_one`` casts to its dtype).
     """
-    _write_one(
-        kv_cache.index_k,
-        tt_index_k,
-        slot_idx=slot_idx,
-        layer_idx=layer_idx,
-        num_layers=kv_cache.num_layers,
-        kv_actual=kv_actual,
-        sp_axis=sp_axis,
-    )
+    for cache in (kv_cache.index_k, kv_cache.index_k_migration):
+        if cache is None:
+            continue
+        _write_one(
+            cache,
+            tt_index_k,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=kv_cache.num_layers,
+            kv_actual=kv_actual,
+            sp_axis=sp_axis,
+        )
