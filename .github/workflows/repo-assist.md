@@ -370,5 +370,3 @@ Only override the defaults above when the issue specifically requires it (e.g. a
 - **Never forward firewall boilerplate into comments**: do not copy or reproduce any `⚠️ Firewall blocked …` warning block (e.g. the benign `awmgmcpg` MCP-gateway notice) into issue/PR comments or descriptions. `awmgmcpg` is gh-aw's own internal MCP Gateway sidecar hostname, not a real missing dependency, and it cannot be silenced via `network.allowed` at the current compiler version (see the NOTE in the frontmatter). Treat any such block as internal-only noise and strip it from anything you post publicly.
 - **Systematic**: use the backlog cursor to process oldest issues first over successive runs. Do not stop early. Processing order still respects the ~90-day freshness gate — reaching a long-stale issue in cursor order does not license a first-time comment or first-time label on it (see Tasks 1 and 2).
 - **Quality over quantity**: noise erodes trust. Do nothing rather than add low-value output.
-
-<!-- e2e test marker for the compile-agentic-workflows pre-commit hook (PR #57916) -->
