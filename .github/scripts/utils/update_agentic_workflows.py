@@ -9,10 +9,9 @@ for every unique workflow touched.
 
 The gh-aw CLI itself is never installed globally: this script downloads the exact
 release binary pinned in .github/aw/actions-lock.json for the current OS/arch into a
-version-scoped cache directory outside the repo (never git-tracked), verifies its
-sha256 against that release's checksums.txt, and invokes it by path. Switching pinned
-versions never mutates anything in place — each version gets its own cache path — so
-there's nothing to uninstall/downgrade.
+temporary directory, uses it to compile, and deletes it once done — nothing persists
+on disk (in the repo or otherwise) beyond the run, and there's nothing to
+uninstall/downgrade on a contributor's machine.
 
 This intentionally does not commit or push anything. Pre-commit's own tracked-file
 modification detection is the enforcement mechanism for an existing lock file falling
@@ -22,7 +21,7 @@ yet.
 """
 
 import argparse
-import hashlib
+import contextlib
 import json
 import os
 import platform
@@ -70,66 +69,12 @@ def platform_asset_name():
     return asset
 
 
-def cache_dir():
-    root = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(root, "gh-aw")
-
-
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def download_checksum(version, asset):
-    with tempfile.TemporaryDirectory() as tmp:
-        checksums_path = os.path.join(tmp, "checksums.txt")
-        subprocess.run(
-            [
-                "gh",
-                "release",
-                "download",
-                version,
-                "--repo",
-                GH_AW_REPO,
-                "--pattern",
-                "checksums.txt",
-                "--output",
-                checksums_path,
-                "--clobber",
-            ],
-            check=True,
-        )
-        with open(checksums_path) as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) == 2 and parts[1] == asset:
-                    return parts[0]
-    print(f"::error::No checksum for {asset} in {version}'s checksums.txt", file=sys.stderr)
-    sys.exit(1)
-
-
-def ensure_gh_aw_binary(version):
+@contextlib.contextmanager
+def gh_aw_binary(version):
+    """Download the pinned gh-aw binary into a temp dir; delete it on exit either way."""
     asset = platform_asset_name()
-    binary_dir = os.path.join(cache_dir(), version)
-    binary_path = os.path.join(binary_dir, "gh-aw")
-
-    if os.path.isfile(binary_path):
-        return binary_path
-
-    expected_sha256 = download_checksum(version, asset)
-
-    # Download straight into the destination directory (as a .partial file) rather than a
-    # separate system tempdir: os.replace() below must stay within one filesystem to be
-    # atomic, and /tmp vs. the cache root aren't guaranteed to share one. The `finally`
-    # guarantees no partial download or empty version directory survives a failed attempt —
-    # nothing this function creates outlives a successful run except the verified binary
-    # itself.
-    os.makedirs(binary_dir, exist_ok=True)
-    partial_path = binary_path + ".partial"
-    try:
+    with tempfile.TemporaryDirectory() as tmp:
+        binary_path = os.path.join(tmp, "gh-aw")
         subprocess.run(
             [
                 "gh",
@@ -141,33 +86,13 @@ def ensure_gh_aw_binary(version):
                 "--pattern",
                 asset,
                 "--output",
-                partial_path,
+                binary_path,
                 "--clobber",
             ],
             check=True,
         )
-
-        actual_sha256 = sha256_of(partial_path)
-        if actual_sha256 != expected_sha256:
-            print(
-                f"::error::Checksum mismatch for gh-aw {version} ({asset}): "
-                f"expected {expected_sha256}, got {actual_sha256}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        os.chmod(partial_path, 0o755)
-        os.replace(partial_path, binary_path)
-    finally:
-        if os.path.exists(partial_path):
-            os.remove(partial_path)
-        if not os.path.isfile(binary_path):
-            try:
-                os.rmdir(binary_dir)
-            except OSError:
-                pass  # not empty (e.g. a concurrent run already placed it) — fine either way
-
-    return binary_path
+        os.chmod(binary_path, 0o755)
+        yield binary_path
 
 
 def workflow_name_for(path):
@@ -214,12 +139,11 @@ def main():
         return
 
     version = resolve_pinned_version()
-    binary_path = ensure_gh_aw_binary(version)
-
     ok = True
-    for name in names:
-        if not compile_workflow(binary_path, name):
-            ok = False
+    with gh_aw_binary(version) as binary_path:
+        for name in names:
+            if not compile_workflow(binary_path, name):
+                ok = False
 
     sys.exit(0 if ok else 1)
 
