@@ -190,7 +190,7 @@ def matmul_implied_math_formats(format, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
@@ -431,12 +431,6 @@ def test_matmul(
             is_fp32_dest_acc_en=dest_acc,
             num_iterations=1,
             unpacking_to_dest=False,
-            # 2x register-format opt-in needs to flow through inference; only disable
-            # for plain MX formats where there's nothing to infer.
-            disable_format_inference=(
-                format.input_format.is_mx_format()
-                and format.register_format_hint is None
-            ),
             register_format_hint=format.register_format_hint,
         )[0]
         pack_src_format = formats_config.pack_src
@@ -543,10 +537,6 @@ def test_matmul(
         tile_dimensions=output_tile_dimensions,
         use_dense_tile_dimensions=True,
     )
-    disable_format_inference = (
-        format.input_format.is_mx_format() and format.register_format_hint is None
-    )
-
     if is_perf:
         if perf_report is None:
             raise ValueError("perf_report must be provided when is_perf=True")
@@ -559,7 +549,6 @@ def test_matmul(
         "variant_stimuli": variant_stimuli,
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(

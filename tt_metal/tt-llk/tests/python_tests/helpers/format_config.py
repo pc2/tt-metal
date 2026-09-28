@@ -501,15 +501,14 @@ class FormatConfig:
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B are 2x-packed Src Register formats. They have no L1, math, or pack
-        # representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
+        # MxFp4_2x_A/B are 2x-packed SrcA/SrcB register formats, valid only in the source
+        # registers and as math (the ALU source format the kernel configures).
         srcab_only = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
             ("unpack_S_src", self.unpack_S_src),
             ("unpack_S_dst", self.unpack_S_dst),
-            ("math", self.math),
             ("sfpu_src", self.sfpu_src),
             ("sfpu_dst", self.sfpu_dst),
             ("pack_src", self.pack_src),
@@ -520,7 +519,7 @@ class FormatConfig:
             if value in srcab_only:
                 raise ValueError(
                     f"{value.name} is a 2x-packed SrcA/SrcB-only format and cannot be used "
-                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst. "
+                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst / math. "
                     f"For L1 input use DataFormat.MxFp4."
                 )
 
