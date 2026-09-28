@@ -54,8 +54,6 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
   ttsim-ci-changed:
     value: ${{ steps.find-changed-files.outputs.ttsim-ci-changed }}
-  test-command-workflow-changed:
-    value: ${{ steps.find-changed-files.outputs.test-command-workflow-changed }}
 
 runs:
   using: "composite"

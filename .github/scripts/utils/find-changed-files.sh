@@ -34,7 +34,6 @@ LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
-TEST_COMMAND_WORKFLOW_CHANGED=false
 
 
 while IFS= read -r FILE; do
@@ -169,16 +168,6 @@ while IFS= read -r FILE; do
         tools/triage/requirements.txt)
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
-            ;;
-        .github/workflows/test-command.md)
-            # Source markdown for the gh-aw `/test` command workflow. Must come before the
-            # generic **/*.md case below (case stops at the first match) so this gets its
-            # own flag instead of only the blanket DOCS_CHANGED one. Consumed by the
-            # update-agentic-workflows job in pr-gate.yaml, which recompiles
-            # test-command.lock.yml via .github/actions/update-agentic-workflows and commits
-            # it back onto the PR — see that action for the gh-aw compile/commit flow.
-            TEST_COMMAND_WORKFLOW_CHANGED=true
-            DOCS_CHANGED=true
             ;;
         docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
@@ -366,7 +355,6 @@ declare -A changes=(
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
-    [test-command-workflow-changed]=$TEST_COMMAND_WORKFLOW_CHANGED
 )
 
 for var in "${!changes[@]}"; do
