@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -211,6 +212,88 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     }
     auto new_grid = tt::tt_metal::num_cores_to_corerangeset(chosen_cores, compute_grid_size, row_wise);
     return ShardSpec(new_grid, {spec.shape[0], new_shard_width}, spec.orientation);
+}
+
+tt::tt_metal::NdShardSpec rescale_nd_shard_spec_for_output(
+    const tt::tt_metal::NdShardSpec& input_nd_shard_spec,
+    const ttnn::Shape& input_padded_shape,
+    const ttnn::Shape& output_shape,
+    bool tile_layout,
+    uint32_t tile_height,
+    uint32_t tile_width) {
+    const auto tensor_rank = output_shape.rank();
+    const auto shard_rank = input_nd_shard_spec.shard_shape.rank();
+    TT_FATAL(
+        tensor_rank >= shard_rank && input_padded_shape.rank() == tensor_rank,
+        "rescale_nd_shard_spec_for_output: rank mismatch (shard_shape rank={}, input_padded_shape rank={}, "
+        "output rank={})",
+        shard_rank,
+        input_padded_shape.rank(),
+        tensor_rank);
+
+    // NdShardSpec.shard_shape may legally have lower rank than the tensor: it applies to the trailing
+    // `shard_rank` dims, and the allocator (BufferDistributionSpec::squeeze_shape_ranks) folds every
+    // leading dim into the outermost *represented* dim before ceil-dividing by the shard extent. Mirror
+    // that here so the shard counts we preserve/validate are the ones the allocator will see.
+    const uint32_t rank_offset = tensor_rank - shard_rank;
+    uint64_t leading_in = 1;
+    uint64_t leading_out = 1;
+    for (uint32_t d = 0; d < rank_offset; d++) {
+        leading_in *= input_padded_shape[d];
+        leading_out *= output_shape[d];
+    }
+
+    bool empty_output = leading_out == 0;
+    ttsl::SmallVector<uint32_t> new_shard_shape(shard_rank);
+    for (uint32_t i = 0; i < shard_rank; i++) {
+        const uint32_t tensor_dim = rank_offset + i;
+        const uint32_t cur_shard_dim = std::max(input_nd_shard_spec.shard_shape[i], 1u);
+        const uint64_t in_dim = (i == 0 ? leading_in : 1) * input_padded_shape[tensor_dim];
+        const uint64_t out_dim = (i == 0 ? leading_out : 1) * output_shape[tensor_dim];
+        if (out_dim == 0) {
+            // Empty (row-major) output: nothing to distribute; keep the current shard extent so the
+            // spec stays well-formed and avoid dividing by a zero shard extent.
+            new_shard_shape[i] = cur_shard_dim;
+            empty_output = true;
+            continue;
+        }
+        const uint64_t num_shards_along_dim = std::max<uint64_t>(tt::div_up(in_dim, cur_shard_dim), 1);
+        uint64_t new_shard_dim = tt::div_up(out_dim, num_shards_along_dim);
+        if (tile_layout && tensor_rank >= 2 && (tensor_dim == tensor_rank - 2 || tensor_dim == tensor_rank - 1)) {
+            const uint64_t tile_dim = (tensor_dim == tensor_rank - 2) ? tile_height : tile_width;
+            new_shard_dim = std::max(tt::round_up(new_shard_dim, tile_dim), tile_dim);
+        }
+        new_shard_shape[i] = static_cast<uint32_t>(new_shard_dim);
+    }
+
+    auto output_nd_shard_spec = input_nd_shard_spec.with_shard_shape(ttnn::Shape(new_shard_shape));
+
+    // CONTIGUOUS_1D needs total shards divisible by num_cores, and tile-alignment rounding above can
+    // shrink the shard count for a dimension that shrank a lot. Keep the rescaled shard shape and use
+    // the first k cores of the grid instead, with k the largest core count that divides the shard count
+    // (counted on the same squeezed geometry the allocator uses). k >= 1 always exists.
+    const uint32_t num_cores = input_nd_shard_spec.grid.num_cores();
+    if (!empty_output && num_cores > 1 &&
+        input_nd_shard_spec.shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D) {
+        const auto [squeezed_tensor, squeezed_shard] =
+            tt::tt_metal::detail::squeeze_shape_ranks(output_shape, output_nd_shard_spec.shard_shape);
+        uint64_t total_new_shards = 1;
+        for (size_t i = 0; i < squeezed_tensor.rank(); i++) {
+            total_new_shards *= tt::div_up(squeezed_tensor[i], squeezed_shard[i]);
+        }
+        uint32_t usable_cores = num_cores;
+        while (total_new_shards % usable_cores != 0) {
+            usable_cores--;
+        }
+        if (usable_cores != num_cores) {
+            const bool row_wise = input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+            auto usable_grid =
+                tt::tt_metal::select_from_corerangeset(input_nd_shard_spec.grid, 0, usable_cores - 1, row_wise);
+            output_nd_shard_spec.grid = usable_grid.merge_ranges();
+        }
+    }
+
+    return output_nd_shard_spec;
 }
 
 }  // namespace ttnn::operations::data_movement::common

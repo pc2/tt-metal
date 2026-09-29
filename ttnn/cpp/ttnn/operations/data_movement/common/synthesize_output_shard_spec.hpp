@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -51,5 +52,20 @@ std::optional<tt::tt_metal::ShardSpec> shrink_shard_for_rm_page_alignment(
     const tt::tt_metal::CoreCoord& compute_grid_size,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     RmPageAlignmentMode mode = RmPageAlignmentMode::Strict);
+
+// Rescales a true-ND shard spec to fit a sliced output shape, keeping the orientation/distribution
+// strategy and (where possible) the per-dimension shard count.
+//
+// Tile-alignment rounding of a shrunk dimension can reduce the shard count (e.g. shard height 64 over
+// 4 cores, sliced 256 -> 64: the rescale wants height 16, tile-rounds to 32, leaving 2 shards). For
+// CONTIGUOUS_1D, which needs total shards divisible by num_cores, the grid is then shrunk to its first
+// k cores (in orientation order), with k the largest core count dividing the new shard count.
+tt::tt_metal::NdShardSpec rescale_nd_shard_spec_for_output(
+    const tt::tt_metal::NdShardSpec& input_nd_shard_spec,
+    const ttnn::Shape& input_padded_shape,
+    const ttnn::Shape& output_shape,
+    bool tile_layout,
+    uint32_t tile_height,
+    uint32_t tile_width);
 
 }  // namespace ttnn::operations::data_movement::common
