@@ -156,6 +156,9 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
 def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
     """Determine device name for CCL based on the host-local device count."""
     num_devices = _get_local_num_devices(mesh_device)
+    # Dont use the local num_devices in a multi-host setup
+    if ttnn.using_distributed_env() and mesh_device.get_num_devices() > num_devices:
+        num_devices = mesh_device.get_num_devices()
     arch_name = ttnn.get_arch_name()
     dram_grid_size = mesh_device.dram_grid_size()
 
