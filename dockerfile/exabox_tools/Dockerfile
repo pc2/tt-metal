@@ -101,4 +101,10 @@ RUN sudo chmod -R 777 /home/user
 RUN sudo mkdir -p /run/sshd
 RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
 
+# No entrypoint. The dev base image's /usr/local/bin/entrypoint.sh would otherwise be
+# inherited; it runs `set -e; service ssh start; exec "$@"`, which fails noisily as a
+# non-root user and would make every 'docker run <image> <cmd>' depend on sshd starting.
+# Every consumer (recover.sh, mpi-docker, launch-health-check.sh, the k8s jobs) supplies
+# its own command.
+ENTRYPOINT []
 CMD ["/bin/bash"]
