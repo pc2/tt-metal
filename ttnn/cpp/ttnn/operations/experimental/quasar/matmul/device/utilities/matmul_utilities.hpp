@@ -351,12 +351,6 @@ void validate_matmul_reuse_work_split(
 }  // namespace ttnn::operations::experimental::quasar::matmul::utilities
 
 namespace ttnn::prim::qsr::dram_sharded_helpers {
-// This type of access pattern cannot be copied.
-// Treat it as a one off patch to restore functionality that
-// was adjusted to fix one P0 causing another P0.
-// TODO: Proper fix will be implemented in Issue #32205
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
-
 void get_max_page_size_and_num_pages(
     tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_tiles,

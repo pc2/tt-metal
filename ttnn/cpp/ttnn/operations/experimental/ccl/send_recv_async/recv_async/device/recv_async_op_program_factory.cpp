@@ -51,6 +51,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
     const auto& output_tensor = tensor_args;
     auto* mesh_device = output_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
+    const auto target_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -68,7 +69,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {
         const auto& connection = socket_connection_config[i];
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (socket_mesh_device->get_fabric_node_id(connection.receiver_core.device_coord) == target_fabric_node_id) {
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
             receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));

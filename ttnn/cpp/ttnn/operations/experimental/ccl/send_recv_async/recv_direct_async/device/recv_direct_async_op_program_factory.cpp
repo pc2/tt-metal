@@ -25,7 +25,7 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// The socket connections whose receiver core sits on `target_device`, in socket-connection order.
+// The socket connections whose receiver core sits on `target_fabric_node_id`, in socket-connection order.
 // create_descriptor and override_runtime_arguments both walk this so the per-core runtime-arg
 // ordering they assume stays identical.
 struct ReceiverConnections {
@@ -35,11 +35,13 @@ struct ReceiverConnections {
 };
 
 ReceiverConnections collect_receiver_connections(
-    const tt::tt_metal::distributed::MeshSocket& mesh_socket, const Tensor& output_tensor, IDevice* target_device) {
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    const Tensor& output_tensor,
+    const tt::tt_fabric::FabricNodeId& target_fabric_node_id) {
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     ReceiverConnections connections;
     for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (socket_mesh_device->get_fabric_node_id(connection.receiver_core.device_coord) == target_fabric_node_id) {
             connections.core_coords.push_back(connection.receiver_core.core_coord);
             connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
@@ -65,7 +67,8 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
     IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_direct_async");
 
-    auto connections = collect_receiver_connections(mesh_socket, output_tensor, target_device);
+    auto connections = collect_receiver_connections(
+        mesh_socket, output_tensor, output_tensor.device()->get_fabric_node_id(*mesh_dispatch_coordinate));
     const auto& receiver_core_coords = connections.core_coords;
     const auto& sender_fabric_node_ids = connections.sender_fabric_node_ids;
     const auto& receiver_fabric_node_ids = connections.receiver_fabric_node_ids;
@@ -170,8 +173,8 @@ void RecvDirectAsyncProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args;
-    IDevice* target_device =
-        ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_direct_async");
+    const auto target_fabric_node_id = ttnn::send_recv_utils::resolve_target_fabric_node_id(
+        output_tensor, mesh_dispatch_coordinate, "recv_direct_async");
 
     // The rest of the runtime args (the fabric connection trailer) derives from the socket topology,
     // which is in the program hash — so on a cache hit only these two base addresses can have moved.
@@ -179,7 +182,7 @@ void RecvDirectAsyncProgramFactory::override_runtime_arguments(
     const uint32_t output_base_addr = output_tensor.buffer()->address();
 
     for (const auto& receiver_core_coord :
-         collect_receiver_connections(mesh_socket, output_tensor, target_device).core_coords) {
+         collect_receiver_connections(mesh_socket, output_tensor, target_fabric_node_id).core_coords) {
         auto& handshake_runtime_args = GetRuntimeArgs(program, handshake_kernel_index, receiver_core_coord);
         handshake_runtime_args[0] = socket_config_addr;
         handshake_runtime_args[1] = output_base_addr;

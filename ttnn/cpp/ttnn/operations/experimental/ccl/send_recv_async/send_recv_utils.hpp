@@ -24,6 +24,9 @@ uint32_t handshake_page_size(uint32_t max_alignment);
 tt::tt_metal::IDevice* resolve_target_device(
     const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord, const std::string& op_name);
 
+tt::tt_fabric::FabricNodeId resolve_target_fabric_node_id(
+    const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord, const std::string& op_name);
+
 uint32_t socket_max_alignment(const ttnn::Tensor& tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 void validate_fifo_size(

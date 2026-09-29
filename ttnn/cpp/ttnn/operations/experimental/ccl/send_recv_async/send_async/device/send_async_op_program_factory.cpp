@@ -49,6 +49,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     const auto& input_tensor = tensor_args;
     auto* mesh_device = input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
+    const auto target_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -67,7 +68,7 @@ SendAsyncMeshWorkloadFactory::create_at(
 
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
         const auto& connection = socket_connection_config[conn_idx];
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+        if (socket_mesh_device->get_fabric_node_id(connection.sender_core.device_coord) == target_fabric_node_id) {
             sender_core_coords.push_back(connection.sender_core.core_coord);
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
             sender_fabric_node_ids.push_back(

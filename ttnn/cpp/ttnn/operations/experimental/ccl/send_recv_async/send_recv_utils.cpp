@@ -26,6 +26,12 @@ tt::tt_metal::IDevice* resolve_target_device(
     return tensor.device()->get_device(*coord);
 }
 
+tt::tt_fabric::FabricNodeId resolve_target_fabric_node_id(
+    const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord, const std::string& op_name) {
+    TT_FATAL(coord.has_value(), "{}: the program factory requires a per-device mesh dispatch coordinate", op_name);
+    return tensor.device()->get_fabric_node_id(*coord);
+}
+
 uint32_t socket_max_alignment(const ttnn::Tensor& tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     return std::max(
         tensor.buffer()->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),

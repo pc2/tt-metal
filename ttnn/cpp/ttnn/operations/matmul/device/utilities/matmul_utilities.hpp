@@ -378,12 +378,6 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
-// This type of access pattern cannot be copied.
-// Treat it as a one off patch to restore functionality that
-// was adjusted to fix one P0 causing another P0.
-// TODO: Proper fix will be implemented in Issue #32205
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
-
 void get_max_page_size_and_num_pages(
     tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_tiles,
