@@ -86,6 +86,18 @@ Options for `<tag>`:
 
 To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
 
+**`exabox-tools` image**
+
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools`, built from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile). It has the same content as `upstream-tests-bh-glx` (full build tree, `runtime/`, ttnn wheel, sources at the build SHA) plus the health-check Python requirements and `pciutils` baked in, and no test-script entrypoint. It is the single image `recover.sh`, the fabric system health check and the k8s cronjobs are meant to share. It is a separate workflow from upstream-tests on purpose: upstream-tests fails often, and `:latest` here has to keep tracking `main` regardless.
+
+Tags:
+- `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - immutable, one per workflow run.
+- `exabox-tools:latest` - moves on every run from `main` (daily at 10:00 UTC, or manual dispatch), or from a branch when the workflow is dispatched with `update-latest`. It is gated only by the build-time smoke test in the Dockerfile (tools start, CPU-only descriptor tests pass, scripts parse), not by hardware tests.
+
+To build from a branch: dispatch the workflow on that branch; the run summary lists the tags.
+
+To pin a run, pass `--image ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>`. To find which commit a running container came from: `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>`.
+
 ### Physical Validation
 
 Discovers Ethernet connections, compares against expected topology (FSD), resets chips, sends traffic. Catches bad cables, DRAM failures, unstable links, CRC errors.
