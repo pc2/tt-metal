@@ -14,6 +14,11 @@ name: Build and publish exabox-tools image
 #                                                       or on a branch with update-latest=true
 
 on:
+  # TEMP: remove before merge. Lets the workflow run and get indexed while it only
+  # exists on this branch, so it can be tested and dispatched pre-merge.
+  push:
+    branches:
+      - jpanasiuk/exabox-tools-image
   workflow_dispatch:
     inputs:
       update-latest:
