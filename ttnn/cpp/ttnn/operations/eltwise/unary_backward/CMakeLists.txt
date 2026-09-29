@@ -12,7 +12,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE unary_backward_kernels device/kernels/*.cpp)
+file(
+    GLOB_RECURSE unary_backward_kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*.cpp)
 
