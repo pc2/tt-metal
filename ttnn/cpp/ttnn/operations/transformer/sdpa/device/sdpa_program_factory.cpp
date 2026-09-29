@@ -716,19 +716,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
-    // Blackhole serves DRAM slowest on the low rows, so a causal remainder that is the minority of the grid goes to
-    // the last cores; a majority stays where it is, concentrating it on the bottom rows measured slower.
-    const bool remainder_on_last_cores =
-        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores;
-    const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
+    // A core's contiguous slice of the flat (B, NQH, q_num_chunks) space; the first cores carry the remainder.
     auto global_q_range_for_core = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
-        const uint32_t extras_before =
-            std::min(i > global_q_first_extra_core ? i - global_q_first_extra_core : 0u, global_q_cores_doing_extra);
-        uint32_t start = i * global_q_base_chunks_per_core + extras_before * global_q_extra_chunks_per_core;
-        uint32_t count = global_q_base_chunks_per_core;
-        if (i >= global_q_first_extra_core && i < global_q_first_extra_core + global_q_cores_doing_extra) {
-            count += global_q_extra_chunks_per_core;
-        }
+        uint32_t start = i * global_q_base_chunks_per_core +
+                         std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
         if (start >= total_q_chunks) {
             start = total_q_chunks;
             count = 0;
