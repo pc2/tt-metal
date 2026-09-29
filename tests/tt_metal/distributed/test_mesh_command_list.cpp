@@ -118,12 +118,13 @@ MeshWorkload make_l1_write_workload(
 IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->get_devices().at(0); }
 
 void write_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address, uint32_t value) {
-    detail::WriteToDeviceL1(device(mesh_device), kNode, address, std::vector<uint32_t>{value});
+    std::vector<uint32_t> data{value};
+    ::tt::tt_metal::detail::WriteToDeviceL1(device(mesh_device), kNode, address, data);
 }
 
 uint32_t read_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address) {
     std::vector<uint32_t> result;
-    detail::ReadFromDeviceL1(device(mesh_device), kNode, address, sizeof(uint32_t), result);
+    ::tt::tt_metal::detail::ReadFromDeviceL1(device(mesh_device), kNode, address, sizeof(uint32_t), result);
     EXPECT_EQ(result.size(), 1u);
     return result.at(0);
 }
@@ -291,22 +292,22 @@ TEST_F(CommandListTest, UpdatesTensorArgumentForSubsequentReplays) {
         data_b[i] = 0x80000000u + static_cast<uint32_t>(i);
     }
     const std::vector<uint32_t> zeros(data_a.size(), 0);
-    detail::WriteToBuffer(*input_a.mesh_buffer().get_reference_buffer(), data_a);
-    detail::WriteToBuffer(*input_b.mesh_buffer().get_reference_buffer(), data_b);
-    detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
+    ::tt::tt_metal::detail::WriteToBuffer(*input_a.mesh_buffer().get_reference_buffer(), data_a);
+    ::tt::tt_metal::detail::WriteToBuffer(*input_b.mesh_buffer().get_reference_buffer(), data_b);
+    ::tt::tt_metal::detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
 
     command_list.replay(/*blocking=*/true);
     std::vector<uint32_t> result;
-    detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
+    ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
     EXPECT_EQ(result, data_a);
 
     CmdListArgPatch patch;
     patch.tensor_args.emplace(input_param, m2::ProgramRunArgs::TensorArgument{input_b});
     command_list.update_args(patch);
-    detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
+    ::tt::tt_metal::detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
     command_list.replay(/*blocking=*/true);
     result.clear();
-    detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
+    ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
     EXPECT_EQ(result, data_b);
 }
 

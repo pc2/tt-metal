@@ -21,6 +21,8 @@ using tt_metal::experimental::ProgramRunArgs;
 using tt_metal::experimental::Table;
 using tt_metal::experimental::TensorParamName;
 
+class CommandList;
+
 // Command-list parameter names are distinct from the Program parameter names to
 // prevent accidentally using one in place of the other.
 using CmdListTensorArgName = ttsl::StrongType<std::string, struct CmdListTensorArgNameTag>;

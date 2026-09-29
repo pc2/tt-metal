@@ -813,7 +813,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -861,7 +861,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     void* dst,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     ttsl::Span<const SubDeviceId> sub_device_ids) {

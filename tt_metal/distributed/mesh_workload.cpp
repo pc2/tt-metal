@@ -270,6 +270,7 @@ std::shared_ptr<MeshBuffer> MeshWorkloadImpl::prepare_for_command_list(MeshComma
         set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::Committed);
     }
 
+    generate_dispatch_commands(mesh_cq);
     return kernel_bin_buf_;
 }
 

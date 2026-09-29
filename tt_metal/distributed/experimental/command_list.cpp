@@ -20,11 +20,14 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/mesh_coord_utils.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/dispatch_mem_map.hpp"
 #include "tt_metal/impl/dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/dispatch/launch_message_ring_buffer_state.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
@@ -272,7 +275,7 @@ FDMeshCommandQueue& as_fd_queue(MeshCommandQueue& cq) {
 class CommandListBuilder::Impl {
 public:
     explicit Impl(MeshDevice& mesh_device) :
-        mesh_device(mesh_device), sub_device_manager_id(*mesh_device.get_active_sub_device_manager_id()) {
+        mesh_device(mesh_device), sub_device_manager_id(mesh_device.get_active_sub_device_manager_id()) {
         mesh_device.impl().acquire_command_list_builder();
         lock_held = true;
     }
@@ -577,7 +580,6 @@ private:
 
 public:
     static CommandListAssembly assemble(MeshCommandQueue& cq, std::vector<StagedCommandListNode>& staged_nodes) {
-        const auto& hal = MetalContext::instance().hal();
         auto& mesh_device = *cq.device();
         OfflineDispatchState dispatch_state(mesh_device, static_cast<uint8_t>(cq.id()));
 
@@ -587,7 +589,8 @@ public:
         const auto local_mesh_range = mesh_device.get_view().get_local_mesh_coord_range();
         const auto device_ranges = compute_device_ranges(staged_nodes, local_mesh_range);
 
-        DeviceCommand end_command(hal.get_alignment(HalMemType::HOST));
+        auto& metal_context = MetalContext::instance(mesh_device.impl().get_context_id());
+        DeviceCommand end_command(metal_context, metal_context.hal().get_alignment(HalMemType::HOST));
         end_command.add_prefetch_exec_buf_end();
         std::vector<uint32_t> exec_buf_end(end_command.size_bytes() / sizeof(uint32_t));
         std::memcpy(exec_buf_end.data(), end_command.data(), end_command.size_bytes());
@@ -642,7 +645,7 @@ public:
     struct ResolvedKernelParameter {
         CapturedProgram& captured;
         std::shared_ptr<Kernel> kernel;
-        const detail::ProgramImpl::KernelRTASchema& schema;
+        const ::tt::tt_metal::detail::ProgramImpl::KernelRTASchema& schema;
         const ProgramCommandSequence& command_sequence;
     };
 
@@ -737,7 +740,7 @@ public:
     void add(MeshWorkload& workload, const CmdListParameters& parameters) {
         TT_FATAL(valid, "CommandListBuilder has been deallocated");
         TT_FATAL(
-            *mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
+            mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
             "The active sub-device manager changed while recording a command list");
 
         auto& binary_load_cq = mesh_device.mesh_command_queue();
@@ -809,7 +812,7 @@ private:
         TT_FATAL(valid, "CommandList has been deallocated");
         TT_FATAL(mesh_device != nullptr, "CommandList has no MeshDevice");
         TT_FATAL(
-            *mesh_device->get_active_sub_device_manager_id() == sub_device_manager_id,
+            mesh_device->get_active_sub_device_manager_id() == sub_device_manager_id,
             "The active sub-device manager changed after the command list was built");
     }
 
@@ -874,7 +877,7 @@ public:
         for (const auto& [name, argument] : patch.tensor_args) {
             const auto it = patch_registry.tensor_targets.find(name);
             TT_FATAL(it != patch_registry.tensor_targets.end(), "Unknown command-list tensor parameter '{}'", *name);
-            const auto& tensor = mesh_tensor_of(argument);
+            const auto& tensor = ::tt::tt_metal::experimental::mesh_tensor_of(argument);
             TT_FATAL(
                 &tensor.device() == mesh_device,
                 "Command-list tensor parameter '{}' belongs to a different MeshDevice",
@@ -890,15 +893,44 @@ public:
             }
         }
 
+        std::vector<size_t> data_indices;
+        data_indices.reserve(writes.size());
+        for (const auto& write : writes) {
+            const auto data_it = std::find_if(
+                descriptor.ordered_data.begin(), descriptor.ordered_data.end(), [&](const CommandListData& data) {
+                    return data.device_range == write.range;
+                });
+            TT_FATAL(data_it != descriptor.ordered_data.end(), "Command-list patch targets an unknown device range");
+            TT_FATAL(
+                write.offset + write.words.size() * sizeof(uint32_t) <= data_it->data.size() * sizeof(uint32_t),
+                "Command-list patch exceeds the serialized command stream");
+            data_indices.push_back(static_cast<size_t>(data_it - descriptor.ordered_data.begin()));
+        }
+
         auto& cq = mesh_device->mesh_command_queue(bound_cq_id);
         cq.finish();
-        for (const auto& write : writes) {
+        std::set<size_t> dirty_data_indices;
+        for (size_t i = 0; i < writes.size(); ++i) {
+            const auto& write = writes[i];
+            auto& data = descriptor.ordered_data[data_indices[i]];
+            std::memcpy(
+                reinterpret_cast<uint8_t*>(data.data.data()) + write.offset,
+                write.words.data(),
+                write.words.size() * sizeof(uint32_t));
+            dirty_data_indices.insert(data_indices[i]);
+        }
+
+        const size_t page_size = command_buffer->page_size();
+        for (const size_t data_index : dirty_data_indices) {
+            const auto& data = descriptor.ordered_data[data_index];
+            std::vector<uint32_t> padded = data.data;
+            padded.resize(round_up(padded.size() * sizeof(uint32_t), page_size) / sizeof(uint32_t), 0);
             cq.enqueue_write_shard_to_sub_grid(
                 *command_buffer,
-                write.words.data(),
-                write.range,
+                padded.data(),
+                data.device_range,
                 true,
-                BufferRegion(write.offset, write.words.size() * sizeof(uint32_t)));
+                BufferRegion(0, padded.size() * sizeof(uint32_t)));
         }
     }
 
@@ -969,7 +1001,7 @@ CommandList CommandListBuilder::build(MeshCommandQueue& cq) const {
     TT_FATAL(cq.device() == &impl_->mesh_device, "Command queue belongs to a different MeshDevice");
     TT_FATAL(!impl_->staged_nodes.empty(), "Cannot build an empty CommandList");
     TT_FATAL(
-        *impl_->mesh_device.get_active_sub_device_manager_id() == impl_->sub_device_manager_id,
+        impl_->mesh_device.get_active_sub_device_manager_id() == impl_->sub_device_manager_id,
         "The active sub-device manager changed while building the command list");
 
     (void)as_fd_queue(cq);
