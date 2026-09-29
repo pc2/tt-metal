@@ -78,6 +78,7 @@ def build_and_serialize_kv_chunk_table(
     head_dim,
     path,
     stage_layouts=None,
+    index_k_layers=None,
 ) -> str:
     """Build the M3 multi-config block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -92,6 +93,11 @@ def build_and_serialize_kv_chunk_table(
     mesh at ITS cache's base address, written at the GLOBAL layer index. With stage_layouts None the
     table covers this rank's mesh alone via local ``buffer_address()`` / fabric-node lookups — the
     single-rank path.
+
+    ``index_k_layers`` (global layer ids that carry an index_k, i.e. the MSA layers) limits the index_k
+    config's rows to those layers. The cache allocates index_k for every layer but dense layers never write
+    it, and the decode peer has no index_k on dense layers; a row published on one side only makes the KV
+    Manager reject the whole migration ("covered by only one side"). None publishes every layer.
     """
     tp_axis = 1 - sp_axis
     sp = mesh_shape[sp_axis]
@@ -192,6 +198,10 @@ def build_and_serialize_kv_chunk_table(
             # single-rank synthesized stage carries the real local hostname instead.
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
+            if label == "index_k" and index_k_layers is not None:
+                layer_ids = [first + i for i in range(stage["count"]) if first + i in index_k_layers]
+            else:
+                layer_ids = [first + i for i in range(stage["count"])]
             for global_row in range(sp):
                 fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
                 group_idx = table.add_device_group(fabric_node_ids)
@@ -213,6 +223,16 @@ def build_and_serialize_kv_chunk_table(
                 for slot in range(num_users):
                     for local_layer in range(stage["count"]):
                         global_layer = first + local_layer
+                        if global_layer not in layer_ids:
+                            # No row on a layer without index_k, but advance the bank walk past this
+                            # layer's region so later layers keep their real addresses.
+                            for _ in range(
+                                num_chunks_per_seq_len * tokens_per_chunk_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                            ):
+                                curr_bank_id = (curr_bank_id + 1) % num_banks
+                                if curr_bank_id == 0:
+                                    curr_bank_offset += chunk_bytes
+                            continue
                         for seq_chunk in range(num_chunks_per_seq_len):
                             chunk_token_start = seq_chunk * chunk_size + global_row * tokens_per_chunk_local
                             chunk_token_end = chunk_token_start + tokens_per_chunk_local
