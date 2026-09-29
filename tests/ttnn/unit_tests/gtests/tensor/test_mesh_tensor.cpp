@@ -167,7 +167,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const auto& view = mesh_device_->get_view();
     const auto buffer_address = input_tensor.mesh_buffer().address();
 
-    for (auto* device : view.get_devices()) {
+    for (auto* device : view.get_devices(distributed::MeshCoordinateRange(view.shape()))) {
         auto coordinate = view.find_device(device->id());
         auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 

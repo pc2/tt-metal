@@ -165,13 +165,15 @@ int main(int argc, char** argv) {
     // Producer-side wall clock, independent of the receiver's decoded-marker zone window.
     const auto t_launch = std::chrono::steady_clock::now();
     if (slow_dispatch) {
-        for (IDevice* device : mesh_device->get_devices()) {
+        const distributed::MeshCoordinateRange device_range(mesh_device->shape());
+        for (const auto& coord : device_range) {
+            IDevice* device = mesh_device->get_device(coord);
             detail::CompileProgram(device, program);
             detail::WriteRuntimeArgsToDevice(device, program);
             detail::LaunchProgram(device, program, /*wait_until_cores_done=*/false);
         }
-        for (IDevice* device : mesh_device->get_devices()) {
-            detail::WaitProgramDone(device, program);
+        for (const auto& coord : device_range) {
+            detail::WaitProgramDone(mesh_device->get_device(coord), program);
         }
     } else {
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -188,7 +190,7 @@ int main(int argc, char** argv) {
         static const char* const kRisc[5] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
         std::vector<uint32_t> slots(10, 0);
         detail::ReadFromDeviceL1(
-            mesh_device->get_devices().front(),
+            mesh_device->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims())),
             CoreCoord{0, 0},
             kBenchAddr,
             static_cast<uint32_t>(slots.size() * sizeof(uint32_t)),
