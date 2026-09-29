@@ -12,8 +12,8 @@
 // producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
 // Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
-// (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
-// (impl/streaming_profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
+// (tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp) and the host receiver
+// (impl/streaming_profiler/receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
@@ -53,7 +53,7 @@ enum SpscControlBuffer {
     // lane after a loss. The producer stores its tail, fences, then the state, so a reader that observes the state
     // no later than the tail never sees a value the frame's words do not already carry inline. They live in the
     // tails' 64 B block (words 16..31), in the words no Tensix RISC owns -- heads 16..23 and tails 29..30 -- so the
-    // relay's one 64 B read takes state and tails in a single L1 access. Runtime ids: spsc_state_prog_word.
+    // relay's one 64 B read takes state and tails together. Runtime ids: spsc_state_prog_word.
     SPSC_STATE_TIMER_0 = 16,
     SPSC_STATE_PROG_0 = 21,
     // Host->kernel arm: while set a producer blocks on a full ring, because a relay is draining this core; while
@@ -69,7 +69,11 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
+    // On an active eth core hosting a link end: the tail sits in the tails' 64 B block so the eth relay's one read of
+    // that block takes it.
+    SPSC_LINK_SYNC_TAIL = 31,
+    SPSC_LINK_SYNC_HEAD = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,
+    SPSC_CONTROL_END = SPSC_LINK_SYNC_HEAD + 1,  // first unused word; grow the layout here
 };
 // Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
 constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
@@ -86,19 +90,33 @@ static_assert(
 static_assert(
     PROFILER_SPSC_TENSIX_RISC == 5 && SPSC_STATE_TIMER_0 >= PROFILER_SPSC_TENSIX_RISC &&
         SPSC_STATE_TIMER_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 &&
-        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 && spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < 32,
+        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 &&
+        spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_LINK_SYNC_TAIL && SPSC_LINK_SYNC_TAIL < 32,
     "lane state must fill the unowned words of the tails' 64 B block");
 
 // Host->relay stop word: quiesce drains everything with every wait still holding, then the relay exits.
 static constexpr std::uint32_t kRelayStopQuiesce = 1;
-// Relay->host completion words; the host matches the high half. Drained: the relay's last page is out and the host
-// may return every credit. Done follows the socket barrier.
-static constexpr std::uint32_t kRelayDrainedWord = 0xD09D0000u;
+// Relay->host completion words; the host matches the high half.
+static constexpr std::uint32_t kRelayAwaitingAcksWord = 0xD09D0000u;
 static constexpr std::uint32_t kRelayDoneWord = 0xD09E0000u;
 static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
+
+// The control block at each resident core's ctrl address (relays, clock tracker, ruler). The core counts heartbeat from
+// launch, the host writes stop (and go, on the eth cores), and the core writes done at the end. The sync fields are the
+// eth cores' sync ring cursors and drop count.
+struct RelayCtrl {
+    std::uint32_t done;
+    std::uint32_t heartbeat;
+    std::uint32_t go;
+    std::uint32_t sync_tail;
+    std::uint32_t sync_head;
+    std::uint32_t dropped_sync;
+    std::uint32_t rsvd[kRelayCtrlWordStride / sizeof(std::uint32_t) - 6];
+    std::uint32_t stop;
+};
 
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host

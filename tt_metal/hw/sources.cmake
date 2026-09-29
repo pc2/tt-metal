@@ -237,6 +237,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
+    inc/hostdev/streaming_profiler_sync.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h
@@ -270,6 +271,8 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/watcher_common.h
     inc/internal/ethernet/dataflow_api.h
     inc/internal/ethernet/erisc.h
+    inc/internal/ethernet/eth_ptp.hpp
+    inc/internal/ethernet/eth_ptp_clock.hpp
     inc/internal/ethernet/tt_eth_api.h
     inc/internal/ethernet/tt_eth_ss_regs.h
     inc/internal/ethernet/tunneling.h
