@@ -73,12 +73,22 @@ int main(int argc, char** argv) {
     } totals;
     using experimental::streaming_profiler::Batch;
     using experimental::streaming_profiler::RecordType;
-    const auto sub =
-        experimental::streaming_profiler::RegisterCallback("zones-example", [&](const Batch<RecordType::All>& b) {
+    auto sub = experimental::streaming_profiler::RegisterCallback(
+        [&](const Batch<RecordType::All>& b) {
             totals.zones += b.zones().size();
             totals.points += b.events().size() + std::ranges::distance(b.timestamped_data());
             totals.stalls += b.stall_count();
-        });
+        },
+        "zones-example");
+    std::atomic<uint32_t> once_calls{0};
+    experimental::streaming_profiler::Callback once;
+    once = experimental::streaming_profiler::RegisterCallback(
+        [&](const Batch<RecordType::Zones>&) {
+            if (once_calls++ == 0) {
+                once = {};
+            }
+        },
+        "zones-once");
 
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
@@ -99,6 +109,7 @@ int main(int argc, char** argv) {
         mesh_device = distributed::MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1);
     }
+    const bool profiler_active = experimental::streaming_profiler::IsActive();
     Program program = CreateProgram();
 
     // --gx 0 / --gy 0, or an over-large value, means the full grid; a CoreRange past the grid would throw.
@@ -207,11 +218,18 @@ int main(int argc, char** argv) {
         }
     }
     mesh_device->close();
-    experimental::streaming_profiler::UnregisterCallback(sub);
+    sub = {};
     printf(
         "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
         (unsigned long long)totals.zones.load(),
         (unsigned long long)totals.points.load(),
         (unsigned long long)totals.stalls.load());
+    if (profiler_active && once_calls.load() != 1) {
+        printf(
+            "[streaming profiler zones] FAIL: a callback that unregisters itself on its first call ran %u times, not "
+            "once\n",
+            once_calls.load());
+        return 1;
+    }
     return 0;
 }
