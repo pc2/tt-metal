@@ -221,12 +221,20 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
     }
+    // Reject invalid retargeting before changing any of the current backing-buffer state.
+    const auto max_size = buffer.aligned_size_per_bank();
+    TT_FATAL(
+        total_size <= max_size,
+        "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+        "L1 buffer bank size of {} B",
+        total_size,
+        max_size);
     this->globally_allocated_address_ = buffer.address();
     this->dynamic_cb_ = true;
-    this->max_size_ = buffer.aligned_size_per_bank();
+    this->max_size_ = max_size;
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    this->set_total_size(total_size);
+    this->total_size_ = total_size;
     return *this;
 }
 
