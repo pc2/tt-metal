@@ -130,6 +130,37 @@ class RopeScalingPhi3(RopeScaling):
     short_factor: Optional[list]
 
 
+def get_rope_theta(config: dict, default=None):
+    """RoPE base period, top-level in transformers 4 and under rope_parameters in transformers 5."""
+    if config.get("rope_theta") is not None:
+        return config["rope_theta"]
+    rope_parameters = config.get("rope_parameters") or {}
+    if rope_parameters.get("rope_theta") is not None:
+        return rope_parameters["rope_theta"]
+    return (rope_parameters.get("full_attention") or {}).get("rope_theta", default)
+
+
+def get_rope_local_base_freq(config: dict, default=None):
+    """Local RoPE base of sliding window layers, top-level in transformers 4 and under rope_parameters in transformers 5."""
+    if config.get("rope_local_base_freq") is not None:
+        return config["rope_local_base_freq"]
+    rope_parameters = config.get("rope_parameters") or {}
+    return (rope_parameters.get("sliding_attention") or {}).get("rope_theta", default)
+
+
+def get_rope_scaling(config: dict):
+    """RoPE scaling parameters, rope_scaling in transformers 4 and merged into rope_parameters in transformers 5."""
+    rope_scaling = config.get("rope_scaling")
+    if rope_scaling:
+        return rope_scaling
+    rope_parameters = config.get("rope_parameters") or {}
+    if "full_attention" in rope_parameters:
+        rope_parameters = rope_parameters.get("full_attention") or {}
+    if rope_parameters.get("rope_type") not in (None, "default"):
+        return rope_parameters
+    return None
+
+
 def rope_scaling_model_factory(
     rope_scaling_params: dict, original_max_context_len: Optional[int] = None
 ) -> RopeScaling:
