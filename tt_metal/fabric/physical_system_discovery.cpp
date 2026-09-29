@@ -97,6 +97,7 @@ TrayID get_tray_id_for_chip(
         {"SIENAD8-2L2T", sienad8_canonical_bus_ids},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
         {"H13DSG-O-CPU", {0x21, 0x01, 0x41, 0x61, 0xa1, 0x81, 0xc1, 0xe1}},
+        {"SB27B75430", {0x61, 0x91}},
     };
 
     if (using_mock_cluster_desc) {
