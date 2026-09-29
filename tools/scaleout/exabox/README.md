@@ -88,7 +88,7 @@ To build an image from a custom branch (your own branch or one requested from a 
 
 **`exabox-tools` image**
 
-The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools`, built from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile). It has the same content as `upstream-tests-bh-glx` (full build tree, `runtime/`, ttnn wheel, sources at the build SHA) plus the health-check Python requirements and `pciutils` baked in, and no test-script entrypoint. It is the single image `recover.sh`, the fabric system health check and the k8s cronjobs are meant to share. It is a separate workflow from upstream-tests on purpose: upstream-tests fails often, and `:latest` here has to keep tracking `main` regardless.
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools`, built from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile). It has the same content as `upstream-tests-bh-glx` (full build tree, `runtime/`, ttnn wheel, sources at the build SHA) plus the health-check Python requirements baked in, and no test-script entrypoint. It is the single image `recover.sh`, the fabric system health check and the k8s cronjobs are meant to share. It is a separate workflow from upstream-tests on purpose: upstream-tests fails often, and `:latest` here has to keep tracking `main` regardless.
 
 Tags:
 - `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - immutable, one per workflow run.

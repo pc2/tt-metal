@@ -13,8 +13,8 @@
 #
 # What differs from dockerfile/upstream_test_images/Dockerfile.template:
 #   - No test-script ENTRYPOINT. recover.sh, mpi-docker and the k8s jobs supply the command.
-#   - Health-check Python requirements and pciutils are baked in. Today the launchers install
-#     them at container start over the network with `|| true`.
+#   - Health-check Python requirements are baked in. Today the launchers install them at
+#     container start over the network with `|| true`.
 #   - OCI revision/version labels so a running container can be traced back to a commit.
 #   - A build-time smoke gate as the last RUN. If a tool cannot start, the image is not pushed,
 #     so :latest can only ever move to something that at least starts.
@@ -48,10 +48,9 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
 USER user
 
-# lspci is used by the health check; launch-health-check.sh installs it at container start today.
-RUN sudo apt-get update \
-    && sudo apt-get install -y --no-install-recommends pciutils \
-    && sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+# No apt here on purpose: build containers on the CI runners cannot reach archive.ubuntu.com
+# (connection timeouts, verified twice), so pciutils for the health check's lspci stays a
+# container-start install in launch-health-check.sh, as it is for the upstream-tests image.
 
 RUN git clone https://github.com/tenstorrent/tt-metal --recurse-submodules /home/user/tt-metal
 
