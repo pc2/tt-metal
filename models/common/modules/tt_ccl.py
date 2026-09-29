@@ -162,7 +162,11 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     Returns:
         int: The number of available links.
     """
-    device_name = get_device_name(mesh_device, num_devices=_get_local_num_devices(mesh_device))
+    num_devices = _get_local_num_devices(mesh_device)
+    # Dont use the local num_devices in a multi-host setup
+    if ttnn.using_distributed_env() and mesh_device.get_num_devices() > num_devices:
+        num_devices = mesh_device.get_num_devices()
+    device_name = get_device_name(mesh_device, num_devices=num_devices)
     link_dict = {
         "P100": (0, 0),
         "P150": (0, 0),
