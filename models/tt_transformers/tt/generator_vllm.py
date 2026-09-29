@@ -21,7 +21,12 @@ from vllm.model_executor.models.mistral3 import (
     Mistral3ProcessingInfo,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalDataDict
+
+try:
+    # vLLM 0.24.0 and newer expose MultiModalDataDict from vllm.inputs, older releases from vllm.multimodal.inputs.
+    from vllm.inputs import MultiModalDataDict
+except ImportError:
+    from vllm.multimodal.inputs import MultiModalDataDict
 from vllm.multimodal.processing import BaseDummyInputsBuilder
 
 import ttnn
