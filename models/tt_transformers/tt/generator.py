@@ -528,6 +528,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return tt_out_trace
 
     # Note: This function is called by vLLM
+    @staticmethod
+    def _first_replica_to_torch(tensor, mesh_device):
+        """Returns the copy of the first device of a tensor that is replicated over a mesh, also when the mesh spans several hosts."""
+        gathered = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        return gathered[: gathered.shape[0] // mesh_device.get_num_devices()]
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
@@ -917,9 +923,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
                     ttnn.synchronize_device(self.model[model_id].mesh_device)
 
-                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
+                    # The sampling output is replicated on every device, the composer gathers the copies of both hosts and the first one is used.
+                    mesh_device = self.model[model_id].mesh_device
+                    tokens_host = self._first_replica_to_torch(tt_tokens, mesh_device).reshape(-1)
                     log_probs_host = (
-                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)
+                        self._first_replica_to_torch(tt_log_probs, mesh_device).reshape(-1)
                         if tt_log_probs is not None
                         else None
                     )
