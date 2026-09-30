@@ -686,7 +686,14 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        # The dump gathers the tensor across all ranks and only rank 0 writes the file.
+        # It appears under its final name only once it is complete, other ranks and hosts may look for it at any time.
+        # Only the writing rank renames it, another rank on the same host sees the temporary file as well.
+        tmp_file_name = f"{cache_file_name}.tmp"
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor)
+        writer = not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0
+        if writer and os.path.exists(tmp_file_name):
+            os.replace(tmp_file_name, cache_file_name)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor
@@ -694,7 +701,11 @@ def as_tensor(
     cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
     cache_path = pathlib.Path(cache_file_name)
 
-    if not cache_path.exists() or not cache_path.is_file():
+    cached = cache_path.is_file()
+    # The dump gathers the tensor across all ranks, so every rank must take the same path, a rank that loads while another dumps deadlocks.
+    if ttnn.distributed_context_is_initialized() and int(ttnn.distributed_context_get_size()) > 1:
+        cached = all(ttnn.distributed_context_allgather_int(int(cached)))
+    if not cached:
         return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 
     try:

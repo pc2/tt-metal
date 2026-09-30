@@ -210,8 +210,8 @@ class Transformer(LightweightModule):
             block = hidden_states
             R = None
 
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        host_full = torch.cat(host_tensors, dim=-1)
+        # The mesh composer gathers the column shards of every host, the per device list holds only the local ones.
+        host_full = ttnn.to_torch(block, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
         if R is not None:
             combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
