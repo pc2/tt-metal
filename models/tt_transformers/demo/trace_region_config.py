@@ -107,6 +107,9 @@ def get_logical_sku(request, mesh_device):
 
 
 def get_supported_trace_region_size(request, mesh_device):
+    # TRACE_REGION_SIZE in bytes overrides the table, for models and systems it lists too small or not at all.
+    if os.getenv("TRACE_REGION_SIZE"):
+        return int(os.environ["TRACE_REGION_SIZE"])
     sku = get_logical_sku(request, mesh_device)
     if sku is None:
         return None
