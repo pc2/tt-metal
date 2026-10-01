@@ -142,6 +142,9 @@ def get_supported_trace_region_size(request, mesh_device):
         },
     }
 
+    # TRACE_REGION_SIZE in bytes overrides the table, for models and systems it lists too small or not at all.
+    if os.getenv("TRACE_REGION_SIZE"):
+        return int(os.environ["TRACE_REGION_SIZE"])
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
     base_model_name = base_model_name_from_env()
     return trace_region_size_dict.get(base_model_name, {}).get(device_name_based_on_dp, None)
