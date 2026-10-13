@@ -731,17 +731,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return prepared
 
     def _record_pending_prefill_traces(self):
-        """Record single-user traces; retain prepared batched inputs for capture on first use."""
+        """Record all deferred prefill traces, batched ones included, before the decode trace exists."""
         if not self._pending_prefill_traces:
             return
         logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
         for trace_key, prepared in self._pending_prefill_traces.items():
-            if prepared["forward_kwargs"].get("batch_size", 1) > 1:
-                # Compilation and persistent allocation have already finished.
-                # Capture this bucket only when requested so unused batch sizes
-                # do not consume the model's reserved trace region.
-                self._prepared_prefill_traces[trace_key] = prepared
-                continue
+            # A batched trace captured on first use would run after the decode trace, whose L1 allocations stay
+            # alive for replay and can collide with the static circular buffers of the batched prefill.
             trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(prepared)
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
