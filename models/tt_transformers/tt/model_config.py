@@ -756,8 +756,10 @@ class ModelArgs:
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
         # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
+        # DeepSeek R1 Distill Llama 8B runs the same prefill kernels as Llama 3.1 8B.
         self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
+            self.base_model_name in ("Llama-3.1-8B", "DeepSeek-R1-Distill-Llama-8B")
+            and self.device_name in ("P150", "P300", "P150x4", "P150x8")
         )
 
         if (
@@ -3854,7 +3856,8 @@ class ModelArgs:
 
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
         """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
-        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+        # DeepSeek R1 Distill Llama 8B has the architecture and the weight layout of Llama 3.1 8B, so the reader count applies to it as well.
+        if self.base_model_name not in ("Llama-3.1-8B", "DeepSeek-R1-Distill-Llama-8B") or self.device_name != "P150":
             return 1
 
         if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
