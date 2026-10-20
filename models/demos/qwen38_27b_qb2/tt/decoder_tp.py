@@ -18,6 +18,16 @@ from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
 
 
+# Four P150 boards cabled as a ring form the same 1x4 mesh as the two P300 cards of a QB2.
+# Under tt-run every host reports the cluster type of its own boards while the mesh spans all hosts.
+SUPPORTED_CLUSTER_TYPES = (
+    ttnn.cluster.ClusterType.P300_X2,
+    ttnn.cluster.ClusterType.P150,
+    ttnn.cluster.ClusterType.P150_X2,
+    ttnn.cluster.ClusterType.P150_X4,
+)
+
+
 def validate_qb2_mesh(mesh_device):
     """Reject unsupported hardware before checkpoint conversion or device allocation."""
     arch = mesh_device.arch()
@@ -26,12 +36,12 @@ def validate_qb2_mesh(mesh_device):
     mesh_shape = tuple(mesh_device.shape)
     if (
         arch != ttnn.Arch.BLACKHOLE
-        or cluster_type != ttnn.cluster.ClusterType.P300_X2
+        or cluster_type not in SUPPORTED_CLUSTER_TYPES
         or num_devices != 4
         or mesh_shape != (1, 4)
     ):
         raise ValueError(
-            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
+            "Qwen3.8-27B requires four Blackhole devices in a (1, 4) mesh, a P300_X2 QB2 or a ring of P150 boards; "
             f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
         )
 
