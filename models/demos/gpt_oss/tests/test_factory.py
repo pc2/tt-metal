@@ -158,6 +158,9 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         pytest -k 4x8   # Galaxy                  (manual / non-CI)
     """
     num_devices = ttnn.get_num_devices()
+    # Under tt-run a rank sees only its own devices, the system mesh spans all hosts.
+    if ttnn.using_distributed_env():
+        num_devices = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
     if mesh_shapes is None:
         all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (4, 8)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]

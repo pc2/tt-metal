@@ -731,12 +731,12 @@ class Model:
         u*32 + (last_idx % 32); with get_last_token == -1 no slicing was done and
         user u's logit is at u*max_padded_len + last_idx.
         """
-        device_tensors = ttnn.get_device_tensors(tt_logits)
+        device_tensors = self._device_shards(tt_logits)
         nc = self.mesh_device.shape[1]
         num_rows = self.mesh_device.shape[0]
         for row_idx in range(num_rows):
             device_base = row_idx * nc
-            row_logits = [ttnn.to_torch(device_tensors[device_base + col]) for col in range(nc)]
+            row_logits = [self._decode_host_shard(device_tensors[device_base + col]) for col in range(nc)]
             torch_output = torch.cat(row_logits, dim=-1)
             per_user_stride = 32 if fixed_glt != -1 else torch_output.shape[-2] // users_per_row_per_iter
             for u in range(users_per_row_per_iter):
@@ -1289,7 +1289,7 @@ class Model:
             ]
             tt_out = tt_out.tensor
         if config.tp > 1:
-            device_tensors = ttnn.get_device_tensors(tt_out)
+            device_tensors = self._device_shards(tt_out)
             tp = config.tp
             # Assemble the real vocabulary once. Per-row concatenations followed
             # by a DP concatenation copy the padded logits twice, including shards
@@ -1361,8 +1361,20 @@ class Model:
         # B is the serving limit; a bucketed decode can return fewer rows.
         return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
 
+    def _device_shards(self, tensor):
+        """Returns the shard of every device in mesh order.
+
+        On a mesh over several hosts a rank holds only its own devices, the composer gathers the shards of all hosts as torch tensors.
+        """
+        if not ttnn.using_distributed_env():
+            return ttnn.get_device_tensors(tensor)
+        gathered = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+        return list(gathered.chunk(self.mesh_device.get_num_devices(), dim=0))
+
     @staticmethod
     def _decode_host_shard(tensor):
+        if isinstance(tensor, torch.Tensor):
+            return tensor
         # The aligned row-major host buffer already has Torch's layout. Borrow
         # that storage while assembling the independently owned output; the
         # sampler must never mutate a TT host buffer through this temporary view.
@@ -1377,6 +1389,11 @@ class Model:
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
+        if ttnn.using_distributed_env():
+            device_tensors = self._device_shards(tt_out)
+            if self.users_row_sharded:
+                return torch.concat(device_tensors[:: self.mesh_device.shape[1]], dim=-2)
+            return device_tensors[0]
         if self.users_row_sharded:
             tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_device.shape[1]]
             return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
@@ -1393,11 +1410,13 @@ class Model:
         """
         config = self.mesh_config.get_config(Mode.PREFILL)
         if config.tp > 1:
-            device_tensors = ttnn.get_device_tensors(tt_out)
+            device_tensors = self._device_shards(tt_out)
             tp = config.tp
-            torch_output = torch.cat([ttnn.to_torch(device_tensors[i]) for i in range(tp)], dim=-1)
+            torch_output = torch.cat([self._decode_host_shard(device_tensors[i]) for i in range(tp)], dim=-1)
         else:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            torch_output = self._device_shards(tt_out)[0]
+            if not isinstance(torch_output, torch.Tensor):
+                torch_output = ttnn.to_torch(torch_output)
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
 
