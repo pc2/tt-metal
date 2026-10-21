@@ -450,6 +450,9 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """
     try:
         num_devices = ttnn.get_num_devices()
+        # Under tt-run a rank sees only its own devices, the system mesh spans all hosts.
+        if ttnn.using_distributed_env():
+            num_devices = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
     except RuntimeError as e:
         # Only swallow genuine hardware-enumeration failures (bad runner); let any
         # other RuntimeError propagate so real software regressions stay visible.

@@ -45,6 +45,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.utils.general_utils import device_tensors
 from models.demos.gemma4.demo.sampling_utils import (
     build_device_sampling_params,
     log_sampling_mode,
@@ -1015,7 +1016,7 @@ def run_generation(
         # TTFT window so the metric matches the user-visible "time to first
         # token" (tt_transformers / gpt_oss put argmax inside the same window).
         if is_mesh:
-            logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
+            logits_cpu = ttnn.to_torch(device_tensors(logits)[0])
         else:
             logits_cpu = ttnn.to_torch(logits)
         logits.deallocate(True)
@@ -1111,12 +1112,12 @@ def run_generation(
                 sampled = model.sampling.sample(decode_output, enable_trace=False)
                 tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
                 sampled_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
+                    ttnn.to_torch(device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
                 )
                 return sampled_cpu.reshape(-1)[0].item()
             else:
                 output_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    ttnn.to_torch(device_tensors(decode_output)[0])
                     if is_mesh
                     else ttnn.to_torch(decode_output)
                 )

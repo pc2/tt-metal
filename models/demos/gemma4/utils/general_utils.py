@@ -5,6 +5,18 @@
 General utilities for the Gemma4 demo.
 """
 
+import ttnn
+
+
+def device_tensors(tensor):
+    """Returns the tensor of every device of the mesh in mesh order.
+
+    On a mesh over several hosts a rank can read only its own devices, the host copy gathers the shards of all hosts.
+    """
+    if ttnn.using_distributed_env() and ttnn.is_tensor_storage_on_device(tensor):
+        tensor = tensor.cpu()
+    return ttnn.get_device_tensors(tensor)
+
 
 def get_cache_file_name(tensor_cache_path, name):
     """Build a tensor-cache path prefix for ``ttnn.as_tensor``.
