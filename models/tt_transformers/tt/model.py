@@ -778,10 +778,21 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.to_memory_config(tt_tokens, decode_residual_mem_cfg)
         return tt_tokens
 
+    @staticmethod
+    def _to_host_on_all_ranks(tt_out):
+        """Returns a host copy of a device tensor on a mesh over several hosts.
+
+        A rank can read only its own devices, the device tensors of a host copy gather the shards of all hosts.
+        """
+        if ttnn.using_distributed_env() and ttnn.is_tensor_storage_on_device(tt_out):
+            return tt_out.cpu()
+        return tt_out
+
     def concat_host_output(self, tt_out, is_log_probs=False):
         """
         Concatenate the output of the devices into a single host tensor.
         """
+        tt_out = self._to_host_on_all_ranks(tt_out)
         torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
@@ -841,7 +852,7 @@ class Transformer(LightweightModule):
                 tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(self._to_host_on_all_ranks(tt_out))[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
         # B is the serving limit; a bucketed decode can return fewer rows.

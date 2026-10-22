@@ -1,0 +1,25 @@
+# Channels that failed to retrain after 5 attempts.
+# Each entry is one channel endpoint; both ends of an unretrainable cable
+# typically appear as separate entries.
+total_retrain_iterations: 5
+unretrainable_channels:
+  - host: fpga1601
+    tray_id: 1
+    asic_location: 0
+    channel: 8
+    asic_unique_id: 0x824632541bc0
+  - host: fpga1601
+    tray_id: 1
+    asic_location: 0
+    channel: 10
+    asic_unique_id: 0x824632541bc0
+  - host: fpga1602
+    tray_id: 1
+    asic_location: 0
+    channel: 8
+    asic_unique_id: 0x8246322808c0
+  - host: fpga1602
+    tray_id: 1
+    asic_location: 0
+    channel: 10
+    asic_unique_id: 0x8246322808c0
