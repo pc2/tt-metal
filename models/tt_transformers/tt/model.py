@@ -422,7 +422,20 @@ class Transformer(LightweightModule):
                 (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
             )
         else:
-            block = hidden_states
+            # Only the tile of rows with the last token of each slot is read, on a mesh over several hosts the host gather of the whole output takes seconds.
+            tiles = []
+            for slot in range(padded_batch):
+                start = (last_token_idx_list[slot] // 32) * 32
+                tiles.append(
+                    ttnn.slice(
+                        hidden_states,
+                        (slot, 0, start, 0),
+                        (slot + 1, 1, start + 32, hidden_states.shape[-1]),
+                    )
+                )
+            block = ttnn.concat(tiles, dim=0)
+            for tile in tiles:
+                tile.deallocate(True)
             R = None
 
         # The mesh composer gathers the column shards of every host, the per device list holds only the local ones.
@@ -433,8 +446,8 @@ class Transformer(LightweightModule):
         else:
             rows = []
             for slot in range(padded_batch):
-                lt_idx = last_token_idx_list[slot]
-                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
+                offset = last_token_idx_list[slot] % 32
+                rows.append(host_full[slot : slot + 1, :, offset : offset + 1, :])
             combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
 
         target_batch = padded_batch if target_batch is None else target_batch
