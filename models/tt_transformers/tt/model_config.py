@@ -763,8 +763,10 @@ class ModelArgs:
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
         # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
+        # DeepSeek R1 Distill Llama 8B runs the same prefill kernels as Llama 3.1 8B.
         self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
+            self.base_model_name in ("Llama-3.1-8B", "DeepSeek-R1-Distill-Llama-8B")
+            and self.device_name in ("P150", "P300", "P150x4", "P150x8")
         )
 
         if (
@@ -2186,6 +2188,14 @@ class ModelArgs:
                 return self.get_attn_output_program_config(Mode.DECODE)
         elif mode == Mode.PREFILL:
             dram_sharded_wo = not (self._use_fused_all_gather_matmul or self.is_galaxy)
+            in0_block_w = 1 if self.is_galaxy else None
+            if (
+                self.base_model_name == "DeepSeek-R1-Distill-Llama-70B"
+                and self.device_name == "P150x4"
+                and seq_len > 1024
+            ):
+                # The projection input buffers must fit beside live tensors in L1.
+                in0_block_w = 1
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
@@ -2209,7 +2219,7 @@ class ModelArgs:
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
-                in0_block_w=1 if self.is_galaxy else None,
+                in0_block_w=in0_block_w,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=(
                     math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
@@ -3935,7 +3945,8 @@ class ModelArgs:
 
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
         """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
-        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+        # DeepSeek R1 Distill Llama 8B has the architecture and the weight layout of Llama 3.1 8B, so the reader count applies to it as well.
+        if self.base_model_name not in ("Llama-3.1-8B", "DeepSeek-R1-Distill-Llama-8B") or self.device_name != "P150":
             return 1
 
         if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
