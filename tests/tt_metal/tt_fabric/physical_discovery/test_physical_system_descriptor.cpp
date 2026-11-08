@@ -114,7 +114,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     // Local Connectivity
     for (auto asic : local_asics) {
         auto chip_id = asic_id_to_chip_id.at(asic);
-        auto eth_links = local_eth_links.at(chip_id);
+        auto eth_links_it = local_eth_links.find(chip_id);
         auto neighbors = physical_system_desc.get_asic_neighbors(asic);
 
         for (auto neighbor : neighbors) {
@@ -126,11 +126,16 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             // Ensure that local eth links are populated correctly on the current host
             // This is done by cross referencing eth connectivity returned by the physical
             // descriptor with tt_cluster
+            ASSERT_NE(eth_links_it, local_eth_links.end())
+                << "UMD has no local Ethernet links for chip " << chip_id << " on host " << my_host;
+            const auto& eth_links = eth_links_it->second;
             auto dst_chip = asic_id_to_chip_id.at(neighbor);
             auto eth_conns = physical_system_desc.get_eth_connections(asic, neighbor);
             for (const auto& eth_conn : eth_conns) {
-                auto [remote_chip, remote_chan] = eth_links.at(eth_conn.src_chan);
-                EXPECT_NE(eth_links.find(eth_conn.src_chan), eth_links.end());
+                auto eth_conn_it = eth_links.find(eth_conn.src_chan);
+                ASSERT_NE(eth_conn_it, eth_links.end())
+                    << "UMD has no local Ethernet channel " << eth_conn.src_chan << " for chip " << chip_id;
+                auto [remote_chip, remote_chan] = eth_conn_it->second;
                 EXPECT_EQ(dst_chip, remote_chip);
                 EXPECT_EQ(eth_conn.dst_chan, remote_chan);
 
