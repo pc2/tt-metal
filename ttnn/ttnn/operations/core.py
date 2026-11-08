@@ -925,7 +925,15 @@ def as_tensor(
     cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
     cache_path = pathlib.Path(cache_file_name)
 
-    if not cache_path.exists() or not cache_path.is_file():
+    cached = cache_path.is_file()
+    # Collective cache dumps require every rank to agree whether the file is available.
+    if (
+        cache_dump_mode == ttnn.DumpTensorMode.DISTRIBUTED_GATHER
+        and ttnn.distributed_context_is_initialized()
+        and int(ttnn.distributed_context_get_size()) > 1
+    ):
+        cached = all(ttnn.distributed_context_allgather_int(int(cached)))
+    if not cached:
         return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 
     try:
