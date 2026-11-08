@@ -1422,6 +1422,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     f"max_batch_size {self.model_args[0].max_batch_size}"
                 )
                 use_batched_prefill = False
+            elif padded_batch > 2 * batch_size:
+                # The padded batch spans every slot through the highest occupied slot.
+                logger.info(
+                    f"Batched prefill disabled: padded_batch {padded_batch} for {batch_size} requests, "
+                    f"sequential prefill computes fewer rows"
+                )
+                use_batched_prefill = False
             elif not batched_prefill_fits_token_budget(
                 padded_batch, prefill_seq_lens[0], self.model_args[0].max_prefill_chunk_size
             ):
