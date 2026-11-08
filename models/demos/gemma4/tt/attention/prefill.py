@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.utils.general_utils import device_tensors
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -263,7 +264,7 @@ def _read_sliding_tail_from_paged_cache(
             return None
         row = page_table
         if isinstance(row, ttnn.Tensor):
-            row = ttnn.to_torch(ttnn.get_device_tensors(row)[0])
+            row = ttnn.to_torch(device_tensors(row)[0])
         if row.dim() > 1:
             row = row[user_id]
         lb0, lb1 = start // block_size, chunk_offset // block_size

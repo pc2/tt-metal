@@ -10,6 +10,7 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.gemma4.utils.general_utils import device_tensors
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.attention.operations import effective_block_size
 from models.demos.gemma4.tt.common import GEMMA4_CP_PREFILL_CHUNK, create_tt_model, gemma4_cp_prefill_engaged
@@ -1215,7 +1216,7 @@ class ChunkedPrefillPageTableGuardMixin:
 
         # Logits are tp-gathered inside the forward, so each lane's first chip
         # holds that lane's full-vocab logits.
-        shards = ttnn.get_device_tensors(tt_logits)
+        shards = device_tensors(tt_logits)
         out = torch.zeros(lanes, model.vocab_size, dtype=torch.float32)
         for lane, dev in enumerate(model.lane_device_indices()):
             host = ttnn.to_torch(shards[dev]).float()
@@ -1483,7 +1484,7 @@ class ChunkedPrefillPageTableGuardMixin:
             if tok is None:
                 continue
             try:
-                host = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).reshape(-1).to(torch.int64)
+                host = ttnn.to_torch(device_tensors(tok)[0]).reshape(-1).to(torch.int64)
             except Exception:
                 continue
             pad_w = int(feedback.shape[-1])

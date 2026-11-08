@@ -20,13 +20,15 @@ def test_rejects_unsupported_mesh_before_loading_weights(monkeypatch, expect_err
     monkeypatch.setattr(
         ttnn.cluster,
         "get_cluster_type",
-        lambda: ttnn.cluster.ClusterType.P150_X4 if unsupported == "product" else ttnn.cluster.ClusterType.P300_X2,
+        lambda: ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        if unsupported == "product"
+        else ttnn.cluster.ClusterType.P300_X2,
     )
     precision_loader = Mock()
     checkpoint_loader = Mock()
     monkeypatch.setattr(model, "load_precision", precision_loader)
     monkeypatch.setattr(model, "checkpoint_path", checkpoint_loader)
-    with expect_error(ValueError, "requires a Blackhole P300_X2 QB2"):
+    with expect_error(ValueError, "requires four Blackhole devices"):
         if entrypoint == "model":
             model.Qwen38Model(mesh)
         else:
@@ -35,9 +37,10 @@ def test_rejects_unsupported_mesh_before_loading_weights(monkeypatch, expect_err
     checkpoint_loader.assert_not_called()
 
 
-def test_accepts_qualified_qb2_mesh(monkeypatch):
+@pytest.mark.parametrize("cluster_type", ["P300_X2", "P150", "P150_X4"])
+def test_accepts_four_blackhole_devices_in_a_ring(monkeypatch, cluster_type):
     mesh = Mock(shape=(1, 4))
     mesh.arch.return_value = ttnn.Arch.BLACKHOLE
     mesh.get_num_devices.return_value = 4
-    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: ttnn.cluster.ClusterType.P300_X2)
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: getattr(ttnn.cluster.ClusterType, cluster_type))
     validate_qb2_mesh(mesh)

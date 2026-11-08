@@ -4424,16 +4424,10 @@ class Qwen36Model:
         """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];
         on-device sampling returns sampled token ids or sampled-token log-probs.
         """
+        composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if self.num_devices > 1 else None
         if is_tokens or is_log_probs:
-            # Sampled ids and old-path sampled-token log-probs are replicated across devices.
-            if self.num_devices > 1:
-                return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
-            return ttnn.to_torch(tt_out).reshape(-1)[:B]
-        if self.num_devices > 1:
-            # TP: read one replica (get_device_tensors[0]), not ConcatMeshToTensor (~4x readback).
-            full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-        else:
-            full = ttnn.to_torch(tt_out).float()
+            return ttnn.to_torch(tt_out, mesh_composer=composer).reshape(-1)[:B]
+        full = ttnn.to_torch(tt_out, mesh_composer=composer).float()
         rows = full.reshape(-1, self.args.vocab_size)
         required_rows = B * S
         if rows.shape[0] < required_rows:

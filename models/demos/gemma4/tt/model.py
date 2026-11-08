@@ -27,7 +27,7 @@ from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
+from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, device_tensors, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 # Tracy signpost headers — paired begin/end with the same name. The
@@ -2137,9 +2137,9 @@ class Gemma4Model:
         """
         if self._lane_sharded:
             owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[self.lane_device_indices()[owner]])
+            torch_output = ttnn.to_torch(device_tensors(tt_out)[self.lane_device_indices()[owner]])
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            torch_output = ttnn.to_torch(device_tensors(tt_out)[0])
         else:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
@@ -2271,7 +2271,7 @@ class Gemma4Model:
             block = hidden_states
             R = None
 
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
+        host_tensors = [ttnn.to_torch(dt) for dt in device_tensors(block)]
         if host_tensors[0].shape[-1] == self.hidden_size:
             host_full = host_tensors[0]
         else:
@@ -2616,7 +2616,7 @@ class Gemma4Model:
         def _lane_shards():
             # Under lanes ``B`` is the global slot space; each lane's first chip
             # holds that lane's rows and they are reassembled in lane order.
-            shards = ttnn.get_device_tensors(tt_out)
+            shards = device_tensors(tt_out)
             return [ttnn.to_torch(shards[d]) for d in self.lane_device_indices()]
 
         if is_tokens or is_log_probs:
@@ -2626,7 +2626,7 @@ class Gemma4Model:
                 _ls = self._lane_slots
                 torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
+                torch_out = ttnn.to_torch(device_tensors(tt_out)[0]).reshape(-1)
             else:
                 torch_out = ttnn.to_torch(tt_out).reshape(-1)
             return torch_out[:B]
@@ -2635,7 +2635,7 @@ class Gemma4Model:
             _ls = self._lane_slots
             torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            torch_out = ttnn.to_torch(device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
         return _decode_logits_rows(torch_out[:, :, :B, : self.vocab_size], B, S)

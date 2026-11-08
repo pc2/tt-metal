@@ -76,9 +76,20 @@ class Qwen38Generator:
         ttnn.copy_host_to_device_tensor(source, target)
         self.counters[counter] += 1
 
+    def _first_replica(self, tensor):
+        """Return one device replica from a tensor replicated over the mesh.
+
+        Device storage is local to each rank, the composer gathers every host replica.
+        Every rank must enter the gather in the same order.
+        """
+        if not ttnn.using_distributed_env():
+            return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+        gathered = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        return gathered[: gathered.shape[0] // self.mesh.get_num_devices()]
+
     def _read_tokens(self):
         self.counters["token_readbacks"] += 1
-        return ttnn.to_torch(ttnn.get_device_tensors(self.tokens)[0]).reshape(-1).long()
+        return self._first_replica(self.tokens).reshape(-1).long()
 
     def _host_logits(self, logits):
         self.counters["full_logits_readbacks"] += 1
@@ -115,7 +126,7 @@ class Qwen38Generator:
         if self.history_count == 0:
             return torch.empty(0, 32, dtype=torch.int64)
         self.counters["history_readbacks"] += 1
-        history = ttnn.to_torch(ttnn.get_device_tensors(self.token_history)[0])
+        history = self._first_replica(self.token_history)
         return history[: self.history_count, 0, 0, :].long()
 
     def _release_traces(self, *, keep_prefill=False):

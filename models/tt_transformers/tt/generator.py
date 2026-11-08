@@ -1176,6 +1176,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             sampling.seed_manager.release_slot(local_slot)
         getattr(self, "_slots_prefilled_since_decode", set()).discard(slot)
 
+    @staticmethod
+    def _first_replica_to_torch(tensor, mesh_device):
+        """Return one replica after gathering a replicated tensor across every host."""
+        gathered = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        return gathered[: gathered.shape[0] // mesh_device.get_num_devices()]
+
     # Note: This function is called by vLLM
     def prefill_forward_text(self, *args, **kwargs):
         """Flush deferred trace captures once the prefill that armed them ends successfully.
@@ -1718,12 +1724,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
                     ttnn.synchronize_device(self.model[model_id].mesh_device)
 
-                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
+                    # Sampled tokens are replicated, read one replica after the host gather.
+                    mesh_device = self.model[model_id].mesh_device
+                    tokens_host = self._first_replica_to_torch(tt_tokens, mesh_device).reshape(-1)
                     # tt_log_probs may be a LogProbsResult (top-k logprobs mode) or a plain [B]
                     # tensor (scalar logprobs); mirror the single-user handling so
                     # reformat_logprobs receives per-slot LogProbsResult / scalar entries.
                     plain_log_probs_host = (
-                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)
+                        self._first_replica_to_torch(tt_log_probs, mesh_device).reshape(-1)
                         if tt_log_probs is not None and not isinstance(tt_log_probs, LogProbsResult)
                         else None
                     )
